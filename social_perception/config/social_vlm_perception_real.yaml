@@ -1,0 +1,89 @@
+social_vlm_perception:
+  ros__parameters:
+    # Real deployment: RGB-D and YOLO detection run on the workstation; the robot
+    # only navigates. No VLM is loaded by this pipeline.
+    use_sim_time: false
+
+    # Local YOLO Pose checkpoint: its 17 COCO keypoints drive skeleton and
+    # shoulder-based body orientation in RViz.
+    yolo_model_path: ~/my_amr_thesis_test-main/src/my_amr_perception/weights/yolo26n-pose.pt
+
+    # Standard RGB-D input topics. The depth image must be registered to the
+    # colour image, otherwise a bounding box samples the wrong distance.
+    rgb_topic: /camera/color/image_raw
+    depth_topic: /camera/depth/image_raw
+    camera_info_topic: /camera/color/camera_info
+    depth_camera_info_topic: /camera/depth/camera_info
+    yolo_confidence: 0.25
+    yolo_image_size: 640
+    # CPU works everywhere; switch to cuda:0 when the workstation has headroom.
+    yolo_device: cpu
+
+    # People are published straight into the navigation frame. This requires a
+    # map -> camera_link transform: social_bringup.launch.py publishes it from
+    # the camera_x/camera_y/... arguments when sim:=false.
+    target_frame: map
+    maximum_depth_age: 0.15
+    minimum_depth: 0.2
+    maximum_depth: 12.0
+    # ByteTrack owns detection-to-track association. Its thresholds and lost
+    # track buffer live in config/bytetrack.yaml.
+    bytetrack_config: config/bytetrack.yaml
+    # Avoid publishing a coasted track on top of a newly visible track.
+    duplicate_merge_distance: 0.6
+    # The robot driving across the observer camera's view hides a
+    # person for seconds at a time. Dropping the track that fast
+    # reissues their id and makes downstream tracking flicker.
+    tracking_timeout: 6.0
+    velocity_smoothing: 0.35
+    robot_frame: base_link
+    odom_topic: /odom
+    maximum_odom_age: 0.2
+    tracked_state_topic: /people/tracked_state_json
+    # Constant-velocity prediction in the map frame.
+    # Four constant-velocity points at 0.50, 1.00, 1.50 and 2.00 seconds.
+    prediction_horizon_s: 2.0
+    prediction_step_s: 0.5
+    prediction_min_speed_mps: 0.10
+    prediction_marker_diameter_m: 0.08
+    keypoint_confidence: 0.35
+    keypoint_depth_window_px: 5
+    minimum_shoulder_width_m: 0.15
+    orientation_keypoint_confidence: 0.50
+    orientation_nose_confidence: 0.60
+    orientation_face_confidence: 0.40
+    minimum_face_direction_m: 0.04
+    minimum_face_alignment: 0.45
+    orientation_flip_frames: 4
+    # -1: keep the most recent valid body yaw until this track expires.
+    orientation_hold_frames: -1
+    maximum_shoulder_width_m: 0.60
+    minimum_hip_width_m: 0.15
+    maximum_hip_width_m: 0.50
+    body_yaw_smoothing: 0.30
+    orientation_marker_arrow_length_m: 0.45
+    # Exceeds the ~0.6 s perception frame interval and the 6 s track timeout.
+    orientation_marker_lifetime_s: 7.0
+    orientation_marker_arrow_color_r: 1.0
+    orientation_marker_arrow_color_g: 0.0
+    orientation_marker_arrow_color_b: 0.85
+
+    # Tracked-person output consumed by social_navigation.
+    people_topic: /people
+    people_tracks_topic: /people/tracks
+    people_observations_topic: /people_observations
+    people_orientation_topic: /people/orientation
+    yolo_people_topic: /yolo/people
+    # These equal the driver inputs on hardware, so the node does not relay
+    # them and cannot feed an image topic back into itself.
+    rgb_record_topic: /camera/color/image_raw
+    depth_record_topic: /camera/depth/image_raw
+    interactions_topic: /social_perception/talking_interactions
+    # No Gazebo actors exist here, so there is nothing to clear on hide.
+    clear_interactions_topic: ""
+    # No route-reset events exist for a real camera; retain occlusion coasting.
+    track_reset_topic: ""
+
+    # Deprecated: Qwen now runs in social_vlm_interaction.py, not Block B.
+    enable_vlm: false
+    maximum_talking_distance: 3.0

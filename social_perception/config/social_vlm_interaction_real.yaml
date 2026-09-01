@@ -1,0 +1,33 @@
+social_vlm_interaction:
+  ros__parameters:
+    use_sim_time: false
+    enable_vlm: false
+    rgb_topic: /camera/color/image_raw
+    observations_topic: /people_observations
+    people_topic: /people/tracks
+    # Output semantic state per ByteTrack ID. It is debug-only in this phase;
+    # no Nav2/costmap node subscribes to it yet.
+    states_topic: /social_perception/vlm_person_states
+    # Newest labelled frame sent to Qwen; inspect this before trusting output.
+    labelled_scene_topic: /social_perception/vlm_input_image
+    vlm_adapter_path: Saved_Model
+    vlm_base_model: unsloth/Qwen2-VL-2B-Instruct-bnb-4bit
+    vlm_load_in_4bit: true
+    vlm_require_cuda: true
+    # Keep every FP4/NF4 visual-merger layer on one GPU; do not CPU-offload it.
+    vlm_device: cuda:0
+    vlm_max_new_tokens: 64
+    vlm_min_pixels: 3136
+    vlm_max_pixels: 200704
+    # A rolling four-frame scene is inferred at most once every 2 seconds.
+    # Block B continues at its normal rate while Qwen works in another thread.
+    inference_interval_s: 2.0
+    # Full RGB scenes have ByteTrack ID labels rendered before Qwen sees them.
+    # Four frames at 0.5 s spacing span 1.5 s from oldest to newest.
+    vlm_frame_count: 4
+    vlm_frame_interval_s: 0.5
+    sync_cache_size: 12
+    # This wording matches the four-image fine-tune contract. Output IDs are
+    # validated against visible ByteTrack IDs in the fourth/newest frame.
+    state_prompt: >
+      You are given 4 sequential images from the same short video clip in temporal order (frame 1 → frame 4).\nEach image contains bounding boxes with ID labels.\nThe same ID refers to the same person across all 4 frames.\nExamine all 4 images together as one temporal sequence.\nFor each person ID, track its movement across the sequence and assign exactly one state.\nSTATE DEFINITIONS\n\n- "crossing": moving laterally across the robot's forward path.\n- "approaching": moving toward the robot from the opposite direction.\n- "straight": moving in the same direction as the robot, ahead of it.\n- "talking": interacting or conversing with another person, typically facing or oriented toward them.\n\nUse only the IDs shown on the bounding boxes.\nAssign a state to every person ID present in the clip.\nDetermine the state from the movement trajectory across the sequence, not from a single frame.\nReturn a JSON array with one object containing "id" and "state" for each person. 

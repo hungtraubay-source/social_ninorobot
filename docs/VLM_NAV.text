@@ -1,0 +1,148 @@
+### DU LIEU DAU VAO 
+OUTPUT TASK2
+1.1 DU LIEU CHO 1 NGUOI
+Person[]
+          ├── ID
+          ├── pose(position+orientation)
+          ├── velocity
+          ├── timestamp riêng (first_seen-last_seen)
+          ├── kích thước O–P–R
+          └── confidence
+
+  - id: ID ổn định của người.
+  - pose.position: vị trí theo mét.
+  - pose.orientation: hướng cơ thể hoặc hướng nhìn.
+  - velocity: vận tốc tuyến tính và vận tốc quay.
+  - first_seen: lần đầu phát hiện người.
+  - last_seen: lần cuối thực sự quan sát/xác nhận người.
+  - Các trường o/p/r_radius: kích thước vùng xã hội riêng.
+  - confidence: độ tin cậy của kết quả.
+1.2 DU LIEU DANH SACH NGUOI CO XUAT HIEN TREN MAP
+People
+      ├── header-stamp:Thoi diem tao danh sach nguoi
+                -frame_id:he toa do chung cua nguoi
+      └── Person[]
+          ├── ID
+          ├── pose
+          ├── velocity
+          ├── timestamp riêng
+          ├── kích thước O–P–R
+          └── confidence
+2.1 DU LIEU CHO 1 NHOM
+Group[]
+          ├── ID nhóm
+          ├── ID thành viên
+          ├── tâm nhóm
+          ├── vận tốc nhóm
+          ├── timestamp riêng(first_seen-last_seen)
+          ├── kích thước O–P–R
+          ├── trạng thái
+          └── confidence
+    - first_seen: thời điểm nhóm bắt đầu hình thành.
+    - last_seen: lần cuối nhóm được xác nhận.
+    - confidence: độ tin cậy của kết quả phân nhóm.
+2.2 DU LIEU CHO DANH SACH NHOM
+  Groups
+      ├── header -stamp:Thoi diem tao danh sach nhom
+                 -frame_id:he toa do chung cua nhom
+      └── Group[]
+          ├── ID nhóm
+          ├── ID thành viên
+          ├── tâm nhóm
+          ├── vận tốc nhóm
+          ├── timestamp riêng
+          ├── kích thước O–P–R
+          ├── trạng thái
+          └── confidence
+
+
+
+####YOLO_GAZEBO
+Đối với chính source này, hướng đã triển khai là dùng camera RGB-D cố định trên cao kết hợp YOLO, không phải camera gắn trên robot.
+
+  Luồng xử lý hiện tại:
+
+  Gazebo tạo người và cho người di chuyển
+                      ↓
+  Camera RGB-D trên cao chụp RGB + đo chiều sâu
+                      ↓
+  YOLO phát hiện người trên ảnh RGB
+                      ↓
+  Depth xác định khoảng cách của từng người
+                      ↓
+  TF chuyển vị trí từ camera sang hệ tọa độ world
+                      ↓
+  Xuất vị trí người cho hệ thống social navigation
+
+  ## 1. Tạo người trong Gazebo
+
+  Source có model người 3D với hình dáng thật để YOLO có thể nhận diện. Phần hiển thị sử dụng mesh người, còn phần va chạm dùng hình trụ đơn giản để Gazebo chạy nhẹ và ổn định hơn.
+
+  Model nằm tại social_navigation/models/person/model.sdf.
+
+  Khi chạy mô phỏng, hệ thống tạo sáu người:
+
+  - person_1 đến person_4 chủ yếu đứng yên.
+  - person_5 và person_6 di chuyển lại gần nhau rồi quay về.
+  - Đường đi được mô tả bằng các điểm và thời gian.
+
+  Các vị trí và đường đi nằm trong social_navigation/config/people_paths.yaml.
+
+  Node điều khiển sẽ đọc các điểm này, nội suy vị trí giữa hai điểm và cập nhật người trong Gazebo. Nói đơn giản: file YAML cho biết “ở giây thứ mấy, người phải đứng ở đâu”.
+
+  ## 2. Đặt camera RGB-D trên cao
+
+  Trong thế giới tuong_san.world, source đặt một camera cố định ở góc trên cao, hướng nhìn vào giữa căn phòng.
+
+  Camera tạo ra ba loại dữ liệu:
+
+  - Ảnh màu RGB để YOLO nhìn thấy người.
+  - Ảnh depth để biết mỗi điểm cách camera bao xa.
+  - Camera info chứa thông số phục vụ chuyển từ ảnh 2D sang vị trí 3D.
+
+  Camera được cấu hình trong linorobot2_gazebo/worlds/tuong_san.world:372.
+
+  Camera trên cao được chọn vì có thể quan sát phần lớn căn phòng và ít bị robot hoặc đồ vật che khuất. Tuy nhiên, đây là mô hình camera giám sát phòng, chưa phải góc nhìn camera của robot.
+
+  ## 3. Khai báo vị trí camera bằng TF
+
+  Camera nhìn thấy người theo hệ tọa độ riêng của camera. Trong khi đó, hệ thống điều hướng cần vị trí người theo hệ tọa độ world hoặc map.
+
+  Source tạo hai phép biến đổi:
+
+  world
+    ↓
+  overhead_camera_link
+    ↓
+  overhead_camera_optical_frame
+
+  Nhờ đó, một người được phát hiện trong ảnh có thể được chuyển thành vị trí cụ thể trong căn phòng, ví dụ:
+
+  Người ở x = 2.1 m, y = 0.6 m
+
+  Phần TF nằm trong linorobot2_gazebo/launch/gazebo.launch.py:175.
+
+  ## 4. Dùng YOLO tìm người trong ảnh RGB
+
+  Node YOLO nhận ảnh màu từ camera và chỉ tìm đối tượng thuộc lớp person.
+
+  Kết quả ban đầu chỉ là:
+
+  - Khung chữ nhật bao quanh người.
+  - Độ tin cậy.
+  - Vị trí người trên ảnh theo pixel.
+
+  Ví dụ:
+
+  person, độ tin cậy 87%
+
+  Kết quả 2D được xuất qua topic:
+
+  /social_perception/detections_2d
+
+  Ảnh đã vẽ khung người được xuất qua:
+
+  /social_perception/annotated_image
+
+  Phần này được thực hiện trong social_perception/scripts/social_vlm_perception.py.
+

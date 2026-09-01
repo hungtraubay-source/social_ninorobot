@@ -1,0 +1,12 @@
+# Runtime dependency for the active RGB-D + YOLO Pose social-geometry pipeline.
+ultralytics>=8.0
+
+# Optional dependencies for the separate social_vlm_interaction node. Install
+# these only on the workstation that owns the local Qwen checkpoint; Block B
+# still runs without them when the VLM node is not launched.
+transformers>=4.45
+peft>=0.13
+Pillow>=9.0
+# Choose the PyTorch wheel matching the workstation CUDA version separately.
+# bitsandbytes is required only when vlm_load_in_4bit=true.
+bitsandbytes>=0.43

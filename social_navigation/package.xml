@@ -1,0 +1,28 @@
+<?xml version="1.0"?>
+<package format="3">
+  <name>social_navigation</name>
+  <version>0.1.0</version>
+  <description>Nav2 person costmap layer, velocity safety filter, and Gazebo conversation actors. Consumes /people from social_perception.</description>
+  <maintainer email="user@example.com">ninorobot2</maintainer>
+  <license>Apache-2.0</license>
+
+  <buildtool_depend>ament_cmake</buildtool_depend>
+
+  <depend>rclcpp</depend>
+  <depend>rclcpp_lifecycle</depend>
+  <depend>rclpy</depend>
+  <depend>std_msgs</depend>
+  <depend>geometry_msgs</depend>
+  <depend>nav_msgs</depend>
+  <depend>social_perception</depend>
+  <depend>nav2_costmap_2d</depend>
+  <depend>nav2_util</depend>
+  <depend>pluginlib</depend>
+  <depend>tf2</depend>
+  <depend>tf2_geometry_msgs</depend>
+
+  <export>
+    <build_type>ament_cmake</build_type>
+    <nav2_costmap_2d plugin="${prefix}/social_layer_plugin.xml"/>
+  </export>
+</package>

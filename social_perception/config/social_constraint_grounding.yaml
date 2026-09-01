@@ -1,0 +1,35 @@
+social_constraint_grounding:
+  ros__parameters:
+    use_sim_time: true
+
+    # Block B -> Block D
+    input_topic: /people/tracked_state_json
+    expected_frame: map
+    # Figure-1 field: exactly one asymmetric Gaussian per detected person at now.
+    current_grid_topic: /social_constraints/current_grid
+    # Legacy/debug envelope: max(current + all future layers), no dt semantics.
+    combined_grid_topic: /social_constraints/grid
+    # Typed sequence: each layer has dt_s and its own OccupancyGrid for E/F.
+    prediction_layers_topic: /social_constraints/prediction_layers
+    output_markers_topic: /social_constraints/markers
+
+    # A fixed 20 x 20 m map-frame debug grid. Set this to your map bounds.
+    grid_resolution_m: 0.05
+    grid_origin_x_m: -10.0
+    grid_origin_y_m: -10.0
+    grid_width_m: 20.0
+    grid_height_m: 20.0
+    maximum_cost: 100
+    minimum_published_cost: 1
+    combine_mode: max  # max | sum_clamped
+
+    # Baseline-only geometry. The final D formulation belongs in
+    # make_zones_for_person() and zone_cost() in social_constraint_grounding.py.
+    stationary_radius_m: 0.75
+    front_semi_axis_m: 1.10
+    rear_semi_axis_m: 0.65
+    # In the local body frame: +forward is front, +lateral is person's left.
+    left_semi_axis_m: 0.70
+    right_semi_axis_m: 0.70
+    prediction_cost_decay_per_s: 0.25
+    marker_lifetime_s: 0.75

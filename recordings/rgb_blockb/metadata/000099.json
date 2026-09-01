@@ -1,0 +1,44 @@
+{
+  "timestamp_ns": 289942000000,
+  "observation_window_s": 268.082,
+  "people": [
+    {
+      "slot": "person_1",
+      "track_id": 1,
+      "state": "stationary",
+      "relative_position": "front",
+      "distance_to_robot_m": 2.88,
+      "speed_mps": 0.025,
+      "motion_direction": "stationary",
+      "position_rel_robot_m": {
+        "x": 2.779,
+        "y": 0.756
+      },
+      "relative_velocity_mps": {
+        "x": 0.004,
+        "y": 0.025
+      },
+      "prediction": {
+        "model": "constant_velocity",
+        "horizon_s": 1.5,
+        "trajectory_rel_robot_m": [
+          {
+            "dt_s": 0.5,
+            "x": 2.781,
+            "y": 0.769
+          },
+          {
+            "dt_s": 1.0,
+            "x": 2.783,
+            "y": 0.781
+          },
+          {
+            "dt_s": 1.5,
+            "x": 2.785,
+            "y": 0.794
+          }
+        ]
+      }
+    }
+  ]
+}

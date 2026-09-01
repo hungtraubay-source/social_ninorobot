@@ -1,0 +1,10 @@
+string id
+std_msgs/Header observation_header
+builtin_interfaces/Time inference_stamp
+string[] member_ids
+social_perception/Person[] people
+string state
+bool talking
+float32 confidence
+geometry_msgs/Point center
+string raw_response

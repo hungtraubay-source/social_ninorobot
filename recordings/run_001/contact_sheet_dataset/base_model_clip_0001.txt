@@ -1,0 +1,5 @@
+Image: recordings/run_001/contact_sheet_dataset/contact_sheet/clip_0001.png
+Base model: unsloth/Qwen2-VL-2B-Instruct-bnb-4bit
+Inference latency: 21.32s
+Raw response:
+[{"id": 12, "state": "crossing"}]

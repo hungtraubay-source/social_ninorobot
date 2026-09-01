@@ -1,0 +1,34 @@
+<!-- Replan at 2 Hz for dynamic social spaces; never wait for people to disperse. -->
+<root main_tree_to_execute="MainTree">
+  <BehaviorTree ID="MainTree">
+    <RecoveryNode number_of_retries="8" name="SocialNavigateRecovery">
+      <PipelineSequence name="NavigateWithFastSocialReplanning">
+        <RateController hz="2.0">
+          <RecoveryNode number_of_retries="1" name="ComputeSocialDetour">
+            <ComputePathToPose goal="{goal}" path="{path}" planner_id="GridBased"/>
+            <ClearEntireCostmap name="ClearGlobalCostmapContext"
+              service_name="global_costmap/clear_entirely_global_costmap"/>
+          </RecoveryNode>
+        </RateController>
+        <RecoveryNode number_of_retries="1" name="FollowSocialPath">
+          <FollowPath path="{path}" controller_id="FollowPath"/>
+          <ClearEntireCostmap name="ClearLocalCostmapContext"
+            service_name="local_costmap/clear_entirely_local_costmap"/>
+        </RecoveryNode>
+      </PipelineSequence>
+      <ReactiveFallback name="SocialRecoveryFallback">
+        <GoalUpdated/>
+        <RoundRobin name="SocialRecoveryActions">
+          <Sequence name="ClearBothCostmaps">
+            <ClearEntireCostmap name="ClearLocalCostmap"
+              service_name="local_costmap/clear_entirely_local_costmap"/>
+            <ClearEntireCostmap name="ClearGlobalCostmap"
+              service_name="global_costmap/clear_entirely_global_costmap"/>
+          </Sequence>
+          <Spin spin_dist="0.785"/>
+          <BackUp backup_dist="0.20" backup_speed="0.08"/>
+        </RoundRobin>
+      </ReactiveFallback>
+    </RecoveryNode>
+  </BehaviorTree>
+</root>

@@ -1,0 +1,7 @@
+<library path="social_layer">
+  <class name="social_navigation::SocialLayer"
+         type="social_navigation::SocialLayer"
+         base_class_type="nav2_costmap_2d::Layer">
+    <description>Dynamic social-space layer for individuals and O-P-R group regions.</description>
+  </class>
+</library>

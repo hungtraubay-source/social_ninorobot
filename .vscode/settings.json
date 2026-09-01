@@ -1,0 +1,5 @@
+{
+    "cmake.sourceDirectory": "/home/hung/ninorobot2/linorobot2_base",
+    "git.ignoreLimitWarning": true,
+    "python-envs.defaultEnvManager": "ms-python.python:system"
+}

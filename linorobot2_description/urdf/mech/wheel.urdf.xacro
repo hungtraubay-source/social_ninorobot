@@ -1,0 +1,55 @@
+<?xml version="1.0"?>
+<robot xmlns:xacro="http://ros.org/wiki/xacro">
+  <xacro:macro name="wheel" params="side radius width pos_x pos_y pos_z mass">
+    <link name="${side}_wheel_link">
+      <visual>
+        <origin xyz="0 0 0" rpy="0 0 0"/>
+        <geometry>
+        <!--  <cylinder radius="0.03578" length="${width}"/> -->
+           <mesh filename="file://$(find linorobot2_description)/meshes/wheel_${side}.STL" scale="1 1 1"/>
+        </geometry>
+        <material name="dark">
+          <color rgba="0.9 0.5 0.3 1.0"/>
+        </material>
+      </visual>
+      <collision>
+        <origin xyz="0 0 0" rpy="${pi/2} 0 0"/>
+        <geometry>
+          <cylinder radius="${radius}" length="${width}"/>
+        </geometry>
+      </collision>
+
+      <inertial>
+        <origin xyz="0 0 0" rpy="0 0 0"/>
+        <mass value="${mass}"/>
+        <inertia ixx="${(1/12) * mass * (3*radius*radius + width*width)}" ixy="-8.10920537712205E-06"
+        ixz="3.2206377195194E-06"
+                 iyy="${(1/2) * mass * (radius*radius)}" iyz="-2.38716537151557E-05"
+                 izz="${(1/12) * mass * (3*radius*radius + width*width)}" />
+      </inertial>
+    </link>
+    <gazebo reference="${side}_wheel_link">  
+      <visual>  
+        <material>
+          <!-- <ambient>0.1764 0.4588 0.8509 1.0</ambient>  
+          <diffuse>0.1764 0.4588 0.8509 1.0</diffuse>  
+          <specular>0.1764 0.4588 0.8509 1.0</specular>  
+          <emissive>0.0 0.0 0.0 0.0</emissive>   -->
+
+          <!-- <ambient>0.3 0.3 0.3 1.0</ambient>
+          <diffuse>0.3 0.3 0.3 1.0</diffuse>
+          <specular>0.05 0.05 0.05 1.0</specular>
+          <emissive>0.0 0.0 0.0 0.0</emissive> -->
+        </material>
+      </visual>  
+      <material>Gazebo/FlatBlack</material>
+    </gazebo>
+
+    <joint name="${side}_wheel_joint" type="continuous">
+      <axis xyz="0 1 0" />
+      <parent link="base_footprint"/>
+      <child link="${side}_wheel_link"/>
+      <origin xyz="${pos_x} ${pos_y} ${pos_z}" rpy="0 0 0"/>
+    </joint>
+  </xacro:macro>
+</robot>
