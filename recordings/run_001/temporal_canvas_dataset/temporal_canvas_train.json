@@ -1,0 +1,107 @@
+[
+  {
+    "id": "clip_0001",
+    "image": [
+      "canvas/clip_0001.png"
+    ],
+    "conversations": [
+      {
+        "from": "human",
+        "value": "<image>\nYou are given one temporal trajectory canvas from a robot-view scene. The background is the newest RGB frame at t=1.5 seconds. Each visible person has a ByteTrack ID label. For each ID, numbered trail points show observed positions in temporal order: 1 = t=0.0s, 2 = t=0.5s, 3 = t=1.0s, 4 = t=1.5s (now). The arrow points from the older position to the newest position. Use only IDs visible in the newest frame. Return only a JSON array with one object containing \"id\" and \"state\" for each visible person."
+      },
+      {
+        "from": "gpt",
+        "value": [
+          {
+            "id": 12,
+            "state": "crossing"
+          }
+        ]
+      }
+    ]
+  },
+  {
+    "id": "clip_0002",
+    "image": [
+      "canvas/clip_0002.png"
+    ],
+    "conversations": [
+      {
+        "from": "human",
+        "value": "<image>\nYou are given one temporal trajectory canvas from a robot-view scene. The background is the newest RGB frame at t=1.5 seconds. Each visible person has a ByteTrack ID label. For each ID, numbered trail points show observed positions in temporal order: 1 = t=0.0s, 2 = t=0.5s, 3 = t=1.0s, 4 = t=1.5s (now). The arrow points from the older position to the newest position. Use only IDs visible in the newest frame. Return only a JSON array with one object containing \"id\" and \"state\" for each visible person."
+      },
+      {
+        "from": "gpt",
+        "value": [
+          {
+            "id": 12,
+            "state": "crossing"
+          }
+        ]
+      }
+    ]
+  },
+  {
+    "id": "clip_0003",
+    "image": [
+      "canvas/clip_0003.png"
+    ],
+    "conversations": [
+      {
+        "from": "human",
+        "value": "<image>\nYou are given one temporal trajectory canvas from a robot-view scene. The background is the newest RGB frame at t=1.5 seconds. Each visible person has a ByteTrack ID label. For each ID, numbered trail points show observed positions in temporal order: 1 = t=0.0s, 2 = t=0.5s, 3 = t=1.0s, 4 = t=1.5s (now). The arrow points from the older position to the newest position. Use only IDs visible in the newest frame. Return only a JSON array with one object containing \"id\" and \"state\" for each visible person."
+      },
+      {
+        "from": "gpt",
+        "value": [
+          {
+            "id": 12,
+            "state": "crossing"
+          }
+        ]
+      }
+    ]
+  },
+  {
+    "id": "clip_0004",
+    "image": [
+      "canvas/clip_0004.png"
+    ],
+    "conversations": [
+      {
+        "from": "human",
+        "value": "<image>\nYou are given one temporal trajectory canvas from a robot-view scene. The background is the newest RGB frame at t=1.5 seconds. Each visible person has a ByteTrack ID label. For each ID, numbered trail points show observed positions in temporal order: 1 = t=0.0s, 2 = t=0.5s, 3 = t=1.0s, 4 = t=1.5s (now). The arrow points from the older position to the newest position. Use only IDs visible in the newest frame. Return only a JSON array with one object containing \"id\" and \"state\" for each visible person."
+      },
+      {
+        "from": "gpt",
+        "value": [
+          {
+            "id": 12,
+            "state": "crossing"
+          }
+        ]
+      }
+    ]
+  },
+  {
+    "id": "clip_0005",
+    "image": [
+      "canvas/clip_0005.png"
+    ],
+    "conversations": [
+      {
+        "from": "human",
+        "value": "<image>\nYou are given one temporal trajectory canvas from a robot-view scene. The background is the newest RGB frame at t=1.5 seconds. Each visible person has a ByteTrack ID label. For each ID, numbered trail points show observed positions in temporal order: 1 = t=0.0s, 2 = t=0.5s, 3 = t=1.0s, 4 = t=1.5s (now). The arrow points from the older position to the newest position. Use only IDs visible in the newest frame. Return only a JSON array with one object containing \"id\" and \"state\" for each visible person."
+      },
+      {
+        "from": "gpt",
+        "value": [
+          {
+            "id": 12,
+            "state": "crossing"
+          }
+        ]
+      }
+    ]
+  }
+]

@@ -1,0 +1,126 @@
+<?xml version="1.0" ?>
+<sdf version="1.6">
+  <world name="lirs_test">
+    
+    <!-- Mở cổng Service để ROS 2 có thể điều khiển vị trí (Teleport) -->
+    <plugin name="gazebo_ros_state" filename="libgazebo_ros_state.so"/>
+    <!-- Controls the preloaded actors below. Preloading is required because
+         Gazebo classic does not reliably advance dynamically inserted actor
+         skeletons. They stay below the floor until social_sim releases them. -->
+    <plugin name="animated_people_factory" filename="libanimated_people_release.so"/>
+
+    <actor name="m_sweater">
+      <pose>0 0 -20 0 0 0</pose>
+      <skin>
+        <filename>model://Male/m_sweater/talk.dae</filename><scale>1.0</scale>
+      </skin>
+      <animation name="talk">
+        <filename>model://Male/m_sweater/talk.dae</filename>
+        <scale>1.0</scale><interpolate_x>false</interpolate_x>
+      </animation>
+      <!-- Second animation on the same skeleton. The gathering scenario
+           switches the actor between these two by name at run time. -->
+      <animation name="walking">
+        <filename>model://Male/m_sweater/walk.dae</filename>
+        <scale>1.0</scale><interpolate_x>false</interpolate_x>
+      </animation>
+      <script><loop>true</loop><delay_start>0</delay_start><auto_start>true</auto_start>
+        <trajectory id="0" type="talk">
+          <waypoint><time>0</time><pose>0 0 -20 0 0 0</pose></waypoint>
+          <waypoint><time>3.75</time><pose>0 0 -20 0 0 0</pose></waypoint>
+        </trajectory>
+      </script>
+    </actor>
+
+    <actor name="m_mechanic">
+      <pose>0 0 -20 0 0 0</pose>
+      <skin>
+        <filename>model://Male/m_mechanic/talk.dae</filename><scale>1.0</scale>
+      </skin>
+      <animation name="talk">
+        <filename>model://Male/m_mechanic/talk.dae</filename>
+        <scale>1.0</scale><interpolate_x>false</interpolate_x>
+      </animation>
+      <animation name="walking">
+        <filename>model://Male/m_mechanic/walk.dae</filename>
+        <scale>1.0</scale><interpolate_x>false</interpolate_x>
+      </animation>
+      <script><loop>true</loop><delay_start>0</delay_start><auto_start>true</auto_start>
+        <trajectory id="0" type="talk">
+          <waypoint><time>0</time><pose>0 0 -20 0 0 0</pose></waypoint>
+          <waypoint><time>10.25</time><pose>0 0 -20 0 0 0</pose></waypoint>
+        </trajectory>
+      </script>
+    </actor>
+
+    <actor name="walker_1">
+      <pose>0 0 -20 0 0 0</pose>
+      <skin>
+        <filename>model://Male/m_doctor/walk.dae</filename><scale>1.0</scale>
+      </skin>
+      <animation name="walking">
+        <filename>model://Male/m_doctor/walk.dae</filename>
+        <scale>1.0</scale><interpolate_x>false</interpolate_x>
+      </animation>
+      <script><loop>true</loop><delay_start>0</delay_start><auto_start>true</auto_start>
+        <trajectory id="0" type="walking">
+          <waypoint><time>0</time><pose>0 0 -20 0 0 0</pose></waypoint>
+          <waypoint><time>1.416667</time><pose>0 0 -20 0 0 0</pose></waypoint>
+        </trajectory>
+      </script>
+    </actor>
+    
+    <!-- Giữ lại mặt đất mặc định làm nền móng -->
+    <include>
+      <uri>model://ground_plane</uri>
+    </include>
+
+    <!-- Cafe map as in the original world. -->
+    <include>
+      <uri>model://cafe</uri>
+      <pose>0 0 0 0 0 0</pose>
+    </include>
+    
+    <scene>
+      <ambient>0.7 0.7 0.7 1</ambient>
+      <background>0.7 0.7 0.7 1</background>
+      <shadows>false</shadows>
+    </scene>
+    
+    <include>
+      <uri>model://sun</uri>
+    </include>
+
+    <!-- Self-contained floor: no Gazebo model-database download is required. -->
+    <model name="custom_wood_floor">
+      <static>true</static>
+      <pose>0 0 0 0 0 0</pose>
+      <link name="link">
+        <collision name="collision">
+          <geometry>
+            <box><size>20 20 0.02</size></box>
+          </geometry>
+          <pose>0 0 -0.01 0 0 0</pose>
+        </collision>
+        <visual name="visual">
+          <geometry>
+            <box><size>20 20 0.02</size></box>
+          </geometry>
+          <material>
+            <ambient>0.36 0.20 0.10 1</ambient>
+            <diffuse>0.52 0.30 0.14 1</diffuse>
+          </material>
+        </visual>
+      </link>
+    </model>
+
+    <model name="ban_cafe">
+      <static>true</static><pose>1 1 0 0 0 0</pose>
+      <link name="tabletop"><pose>0 0 0.72 0 0 0</pose><collision name="collision"><geometry><cylinder><radius>0.45</radius><length>0.06</length></cylinder></geometry></collision>
+        <visual name="visual"><geometry><cylinder><radius>0.45</radius><length>0.06</length></cylinder></geometry><material><diffuse>0.20 0.10 0.04 1</diffuse></material></visual></link>
+      <link name="table_leg"><pose>0 0 0.36 0 0 0</pose><collision name="collision"><geometry><cylinder><radius>0.05</radius><length>0.72</length></cylinder></geometry></collision>
+        <visual name="visual"><geometry><cylinder><radius>0.05</radius><length>0.72</length></cylinder></geometry><material><diffuse>0.12 0.12 0.12 1</diffuse></material></visual></link>
+    </model>
+
+  </world>
+</sdf>

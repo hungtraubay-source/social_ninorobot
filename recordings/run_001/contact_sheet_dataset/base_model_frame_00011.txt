@@ -1,0 +1,10 @@
+Image: recordings/run_001/frame_00011.png
+Input mode: single-frame
+Base model: unsloth/Qwen2-VL-2B-Instruct-bnb-4bit
+Inference latency: 19.95s
+Raw response:
+```json
+[
+  {
+    "id": 12,
+    "

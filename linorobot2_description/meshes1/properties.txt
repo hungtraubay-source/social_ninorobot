@@ -1,0 +1,20 @@
+PETG = PLA = ABS * 1.2
+Waffle_Plate: 50 g
+65mm_Wheel: 33.4 g
+A1 RPLIDAR: 170 g
+Pin 18650 3s2p: 320g
+JGA-25 Motor: 160g
+Cover: 60g
+
+base_length = 0.1435 m
+base_width = 0.1435 m
+base_height = 0.156 m
+base_mass = 50*8 + 60 + 320 + 160*2 = 1104 g = 1.1 kg
+
+wheel_radius = 0.033 m
+wheel_width = 0.027 m
+wheel_pos_x = 
+wheel_pos_y = 
+wheel_pos_z = 
+wheel_mass = 0.0334 kg
+wheel_torque = 0.43 N.m

@@ -1,0 +1,32 @@
+<?xml version="1.0"?>
+<robot xmlns:xacro="http://ros.org/wiki/xacro">
+  <xacro:property name="base_length" value="0.20" />
+  <xacro:property name="base_width" value="0.20" />
+  <xacro:property name="base_height" value="0.18852" />
+  <xacro:property name="base_mass" value="2.5" />
+
+  <xacro:property name="wheel_radius" value="0.0325" />
+  <xacro:property name="wheel_width" value="0.027" />
+  <xacro:property name="wheel_pos_x" value="0.0" />
+  <xacro:property name="wheel_pos_y" value="0.10688" />
+  <xacro:property name="wheel_pos_z" value="0.0325" />
+  <xacro:property name="wheel_mass" value="0.7181" />
+  <xacro:property name="wheel_torque" value="0.43" />
+  <xacro:property name="front_caster_wheel" value="false" />
+  <xacro:property name="rear_caster_wheel" value="false" />
+  <xacro:property name="wheel_coast" value="-0.0263800000000001" />
+
+  <xacro:property name="laser_pose">
+    <origin xyz="0.00669528741938097 -7.83717636255732E-05 0.19525868699062" rpy="0 0 0"/>
+  </xacro:property>
+
+  <!-- RGB-D sensor mounted on the front of the robot.  The pose is expressed
+       in base_link: 30 cm above its origin and looking along robot +X. -->
+  <xacro:property name="depth_sensor_pose">
+    <origin xyz="0.14 0.0 0.30" rpy="0 0 0"/>
+  </xacro:property>
+
+  <xacro:property name="rear_camera_sensor_pose">
+    <origin xyz="-0.14 0.0 0.045" rpy="0 0 3.14159"/>
+  </xacro:property>
+</robot>

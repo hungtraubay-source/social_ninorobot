@@ -1,0 +1,31 @@
+<robot xmlns:xacro="http://ros.org/wiki/xacro">
+  <xacro:macro name="diff_drive_controller" params="wheel_separation wheel_radius wheel_torque publish_odom_tf">
+    <gazebo>
+      <plugin name="differential_drive_controller" filename="libgazebo_ros_diff_drive.so">
+        <ros>
+          <remapping>odom:=odom/unfiltered</remapping>
+          <remapping>cmd_vel:=cmd_vel_safe</remapping>
+        </ros>
+        <updateRate>100</updateRate>
+        <left_joint>left_wheel_joint</left_joint>
+        <right_joint>right_wheel_joint</right_joint>
+        <wheel_separation>${wheel_separation}</wheel_separation>
+        <wheel_diameter>${wheel_radius * 2}</wheel_diameter>
+        <max_wheel_acceleration>40.0</max_wheel_acceleration>
+        <robot_base_frame>base_footprint</robot_base_frame>
+        <publish_odom>true</publish_odom>
+        <!-- Enable only for capture/no-EKF runs.  EKF owns this transform in
+             the normal navigation launch, so publishing from both would
+             create competing odom -> base_footprint transforms. -->
+        <xacro:if value="${publish_odom_tf}">
+          <publish_odom_tf>true</publish_odom_tf>
+        </xacro:if>
+        <xacro:unless value="${publish_odom_tf}">
+          <publish_odom_tf>false</publish_odom_tf>
+        </xacro:unless>
+        <publish_wheel_tf>true</publish_wheel_tf>  #da sua thanh true ---> false
+        <odometry_frame>odom</odometry_frame>
+      </plugin>
+    </gazebo>
+  </xacro:macro>
+</robot> 

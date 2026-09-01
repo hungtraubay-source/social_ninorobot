@@ -1,0 +1,10 @@
+Image: recordings/run_001/contact_sheet_dataset/contact_sheet/clip_0001.png
+Input mode: contact-sheet
+Response mode: state-word
+Base model: unsloth/Qwen2-VL-2B-Instruct-bnb-4bit
+Inference latency:
+  Run 1: 14.80s
+  Run 2: 3.45s
+  Run 3: 3.44s
+Raw response:
+crossing

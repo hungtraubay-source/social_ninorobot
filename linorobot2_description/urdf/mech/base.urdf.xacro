@@ -1,0 +1,66 @@
+<?xml version="1.0"?>
+<robot xmlns:xacro="http://ros.org/wiki/xacro">
+  <xacro:macro name="base" params="length width height mass wheel_radius wheel_pos_z">
+    <link name="base_footprint" />
+    
+    <link name="base_link">
+      <visual>
+        <origin xyz="0 0 0" rpy="0 0 0"/> 
+        <geometry> 
+          <!-- <box size="${length} ${width} ${height}"/> -->
+          <!-- <mesh filename="" scale="0.001 0.001 0.001"/> -->
+          <mesh filename="file://$(find linorobot2_description)/meshes/base_link.STL" scale="1 1 1"/>
+        </geometry>
+        <material name="light_black">
+          <color rgba="0.4 0.4 0.4 1.0"/>
+        </material>
+      </visual>
+      
+      <collision>
+        <!-- <origin xyz="-0.0276 0 ${height/2}" rpy="0 0 0"/> -->
+        <origin xyz="0 0 ${height/2-wheel_pos_z}" rpy="0 0 0"/>
+        <geometry>
+          <box size="${length} ${width} ${height}"/>
+        </geometry>
+      </collision> 
+
+      <inertial>
+      <origin
+        xyz="0 0 0" rpy="0 0 0" />
+        
+      <mass value="2.5" />
+      <inertia
+        ixx="0.0116916235837784"
+        ixy="-8.10920537712205E-06"
+        ixz="3.2206377195194E-06"
+        iyy="0.010715791296685"
+        iyz="-2.38716537151557E-05"
+        izz="0.00946805534827865" />
+    </inertial>
+    </link>
+
+    <gazebo reference="base_link">  
+      <visual>  
+        <material>
+          <!-- <ambient>0.8392 0.6314 0.0 1.0</ambient>  
+          <diffuse>0.8392 0.6314 0.0 1.0</diffuse>  
+          <specular>0.99 0.99 0.99 1.0</specular>  
+          <emissive>0.0 0.0 0.0 0.0</emissive>  
+          <ambient>0.4 0.4 0.4 1.0</ambient>   -->
+
+          <!-- <ambient>0.4 0.4 0.4 1.0</ambient>  
+          <diffuse>0.4 0.4 0.4 1.0</diffuse>  
+          <specular>0.2 0.2 0.2 1.0</specular>
+          <emissive>0.0 0.0 0.0 0.0</emissive>   0.0342799999999999 -->
+        </material>
+      </visual> 
+      <material>Gazebo/White</material>
+    </gazebo>
+
+    <joint name="base_to_footprint" type="fixed">
+      <parent link="base_footprint"/>
+      <child link="base_link"/>
+      <origin xyz="0 0 0.0325" rpy="0 0 0"/> 
+    </joint>
+  </xacro:macro>
+</robot>

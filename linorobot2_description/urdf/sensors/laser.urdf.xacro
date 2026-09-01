@@ -1,0 +1,92 @@
+<robot xmlns:xacro="http://ros.org/wiki/xacro">
+  <xacro:property name="M_PI" value="3.1415926535897931" />
+  <xacro:property name="ld_radius" value="0.04" />
+  <xacro:property name="ld_height" value="0.05" />
+  <xacro:property name="ld_mass" value="0.16" />
+  <xacro:macro name="laser" params="*origin update_rate ray_count min_angle max_angle min_range max_range frame_id topic_name">
+    <link name="${frame_id}">
+      <visual>
+        <origin xyz="0 0 0" rpy="0 0 0"/>
+        <geometry>
+          <!-- <cylinder radius="0.0375" length="0.05"/> -->
+          <mesh filename="file://$(find linorobot2_description)/meshes/lidar.STL" scale="1 1 1"/>
+        </geometry>
+        <material name="dark">
+          <color rgba="0.3 0.3 0.3 1.0"/>
+        </material>
+      </visual>
+      <collision>
+        <origin xyz="0 0 0" rpy="0 0 0"/>
+        <geometry>
+          <cylinder radius="${ld_radius}" length="${ld_height}"/>
+        </geometry>
+      </collision>
+
+      <inertial>
+        <origin xyz="0 0 0" rpy="0 0 0"/>
+        <mass value="${ld_mass}"/>
+        <inertia ixx="${(1/12) * ld_mass * (3*ld_radius*ld_radius + ld_height*ld_height)}" ixy="0" ixz="0"
+                 iyy="${(1/12) * ld_mass * (3*ld_radius*ld_radius + ld_height*ld_height)}" iyz="0"
+                 izz="${(1/2) * ld_mass * (ld_radius*ld_radius)}" />
+      </inertial>
+    </link>
+
+    <gazebo reference="${frame_id}">  
+      <visual>  
+        <material>
+          <!-- <ambient>0.003 0.639 0.223 1.0</ambient>  
+          <diffuse>0.003 0.639 0.223 1.0</diffuse>  
+          <specular>0.003 0.639 0.223 1.0</specular>  
+          <emissive>0.0 0.0 0.0 0.0</emissive>   -->
+
+          <!-- <ambient>0.3 0.3 0.3 1.0</ambient>  
+          <diffuse>0.3 0.3 0.3 1.0</diffuse>  
+          <specular>0.1 0.1 0.1 1.0</specular> 
+          <emissive>0.0 0.0 0.0 0.0</emissive> -->
+        </material>
+      </visual> 
+      <material>Gazebo/FlatBlack</material>
+    </gazebo>
+
+    <joint name="${frame_id}_to_base_link" type="fixed">
+      <parent link="base_link"/>
+      <child link="${frame_id}"/>
+      <xacro:insert_block name="origin" />
+    </joint>
+
+    <gazebo reference="${frame_id}">
+      <sensor type="ray" name="${frame_id}_lidar"> #TODO: Change to "gpu_ray" for better performance, xoa gpu oi
+        <always_on>true</always_on>
+        <update_rate>${update_rate}</update_rate>
+        <pose>0 0 0 0 0 0</pose>
+        <visualize>false</visualize>
+        <ray>
+          <scan>
+            <horizontal>
+              <samples>${ray_count}</samples>
+              <resolution>1</resolution>
+              <min_angle>${min_angle}</min_angle>
+              <max_angle>${max_angle}</max_angle>
+            </horizontal>
+          </scan>
+          <range>
+            <min>${min_range}</min>
+            <max>${max_range}</max>
+            <resolution>0.01</resolution>
+          </range>
+        </ray>
+        <plugin name="${frame_id}_lidar_controller" filename="libgazebo_ros_ray_sensor.so">
+          <ros>
+            <remapping>~/out:=${topic_name}</remapping>                                                                                                                           
+          </ros>
+          <output_type>sensor_msgs/LaserScan</output_type>
+          <alwaysOn>true</alwaysOn>
+          <updateRate>${update_rate}</updateRate>
+          <topicName>${topic_name}</topicName>
+          <frame_name>${frame_id}</frame_name>
+          <output_type>sensor_msgs/LaserScan</output_type>
+        </plugin>
+      </sensor>
+    </gazebo>
+  </xacro:macro>
+</robot>
