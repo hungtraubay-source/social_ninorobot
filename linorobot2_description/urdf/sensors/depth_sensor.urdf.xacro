@@ -80,7 +80,13 @@
             </qos>
           </ros>
           <min_depth>0.015</min_depth>
-          <max_depth>3.0</max_depth>
+          <!-- Simulated depth range in metres, matching perception's 12 m
+               maximum_depth. Crossing is about 3.9 m ahead of the camera:
+               the old 3 m cutoff produced Inf at the torso, so Block B
+               could not publish a 3-D person for the Gaussian in Block D.
+               Output: sensor_msgs/Image, 32FC1 metres, camera_depth_link.
+               This Gazebo plugin does not configure the real RGB-D driver. -->
+          <max_depth>12.0</max_depth>
           <hack_baseline>0.07</hack_baseline>
           <frame_name>camera_depth_link</frame_name>
           <distortion_k1>0.00000001</distortion_k1>

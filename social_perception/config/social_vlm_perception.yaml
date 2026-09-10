@@ -16,12 +16,14 @@ social_vlm_perception:
     yolo_image_size: 640
     # CPU works everywhere; switch to cuda:0 when the workstation has headroom.
     yolo_device: cpu
-    # Same contract as the real profile: a person is measured in the depth
-    # camera's optical frame and TF carries that point into the navigation
-    # frame. Targeting `world` instead published people in the Gazebo frame,
-    # which the map is offset from by the robot spawn pose.
-    target_frame: map
-    maximum_depth_age: 0.15
+    # In Gazebo, camera_depth_link is continuously connected to odom through
+    # base_link.  AMCL owns the separate map -> odom transform and may start
+    # after perception, so publishing directly in map makes every RGB-D frame
+    # fail while that link is absent.  Publish in odom instead; Nav2's global
+    # SocialLayer transforms it to map once AMCL is available, while its local
+    # costmap and the safety filter can consume it immediately.
+    target_frame: odom
+    maximum_depth_age: 0.35
     minimum_depth: 0.2
     maximum_depth: 12.0
     # ByteTrack owns detection-to-track association. Its thresholds and lost
@@ -29,16 +31,19 @@ social_vlm_perception:
     bytetrack_config: config/bytetrack.yaml
     # Avoid publishing a coasted track on top of a newly visible track.
     duplicate_merge_distance: 0.6
-    # A person can briefly leave the robot-mounted camera view. Keep the
-    # ByteTrack record long enough to avoid immediately reissuing its ID.
-    tracking_timeout: 6.0
+    # Retain a missed Gazebo detection just long enough to bridge a few camera
+    # frames (the stream is typically below 30 Hz), then remove its social
+    # Gaussian promptly once the actor is actually gone.  The real-camera
+    # profile keeps its longer timeout because a moving robot can occlude a
+    # person for several seconds.
+    tracking_timeout: 1.5
     velocity_smoothing: 0.35
     robot_frame: base_link
     # Gazebo is launched with run_ekf:=false, so its robot velocity is here.
     odom_topic: /odom/unfiltered
     maximum_odom_age: 0.2
     tracked_state_topic: /people/tracked_state_json
-    # Constant-velocity prediction in the map frame.
+    # Constant-velocity prediction in target_frame (odom in Gazebo).
     # Four constant-velocity points at 0.50, 1.00, 1.50 and 2.00 seconds.
     prediction_horizon_s: 2.0
     prediction_step_s: 0.5

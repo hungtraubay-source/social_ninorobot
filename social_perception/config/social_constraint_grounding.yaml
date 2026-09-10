@@ -5,15 +5,15 @@ social_constraint_grounding:
     # Block B -> Block D
     input_topic: /people/tracked_state_json
     expected_frame: map
-    # Figure-1 field: exactly one asymmetric Gaussian per detected person at now.
+    # Optional current grids. Default only publishes red outlines and labels;
+    # disable old RViz Map displays because they may retain cached heatmaps.
+    publish_cost_grid: false
     current_grid_topic: /social_constraints/current_grid
-    # Legacy/debug envelope: max(current + all future layers), no dt semantics.
+    # Compatibility alias of current_grid: current Gaussian only.
     combined_grid_topic: /social_constraints/grid
-    # Typed sequence: each layer has dt_s and its own OccupancyGrid for E/F.
-    prediction_layers_topic: /social_constraints/prediction_layers
     output_markers_topic: /social_constraints/markers
 
-    # A fixed 20 x 20 m map-frame debug grid. Set this to your map bounds.
+    # A fixed 20 x 20 m tracking-frame debug grid. Set this to your map bounds.
     grid_resolution_m: 0.05
     grid_origin_x_m: -10.0
     grid_origin_y_m: -10.0
@@ -23,13 +23,60 @@ social_constraint_grounding:
     minimum_published_cost: 1
     combine_mode: max  # max | sum_clamped
 
-    # Baseline-only geometry. The final D formulation belongs in
-    # make_zones_for_person() and zone_cost() in social_constraint_grounding.py.
-    stationary_radius_m: 0.75
-    front_semi_axis_m: 1.10
-    rear_semi_axis_m: 0.65
-    # In the local body frame: +forward is front, +lateral is person's left.
-    left_semi_axis_m: 0.70
-    right_semi_axis_m: 0.70
-    prediction_cost_decay_per_s: 0.25
+    # Crossing: sigma_h=[1+a*(1-c)]*(d0+k*vh), sigma_s=sigma_r=sigma_h/3.
+    # vh=norm(Block-B velocity_mps), m/s; c is fixed for this experiment.
+    # At vh=1 m/s: sigma_h=1.05 m, sigma_s=sigma_r=0.35 m.
+    # Talking pair: sigma_h=sigma_r=[1+a*(1-c)]*(sep+d0)/4, sigma_s=sigma_h/3.
+    # sep is full centre-to-centre distance in metres. For sep=1.5 m:
+    # h=r=0.505 m, s=0.168 m; outer 15% contour is ~1.97 x 0.66 m.
+    gaussian_d0_m: 0.5
+    gaussian_a: 0.1
+    gaussian_c: 0.9
+    gaussian_k_s: 0.5
+    # EMA áp dụng cho position_m trước khi Block D tính/vẽ Gaussian.
+    # alpha=0.20 lọc mạnh cho cặp talking đứng yên; giảm alpha để mượt hơn,
+    # tăng alpha để bám người crossing nhanh hơn. Đơn vị: không có.
+    position_ema_alpha: 0.20
+    # RViz iso-cost levels, relative to each zone's weighted peak. The
+    # semi-axis of level alpha is sigma*sqrt(-2*ln(alpha)); 15% is 1.948 sigma.
+    # Only lines/labels are drawn. Use [0.15] to display only the outer line.
+    # These levels do not truncate the Gaussian or change its sigma.
+    contour_levels: [0.90, 0.75, 0.60, 0.45, 0.30, 0.15]
+    # Auto for test scenarios: 1 track -> crossing; exactly 2 -> one talking
+    # pair; 0 or >2 ->
+    # clear outlines. It uses measured speed/count, not activity recognition:
+    # an occluded pair can become one track. Keep auto while switching Gazebo
+    # scenarios; no D restart needed. Set ``standing`` explicitly for the
+    # person-looking-at-object ellipse, or ``stationary`` for a fixed circular
+    # personal space that deliberately ignores measured velocity/object pose.
+    # Other explicit modes force their own geometry.
+    # Optional grid cost is maximum_cost*w_state*exp(-q/2), without 5% cutoff.
+    social_state: auto  # auto | talking | standing | stationary | crossing
+    social_weight_talking: 0.9
+    social_weight_standing: 0.7
+    # ``stationary`` is one person with a fixed circular Gaussian.  It is
+    # separate from ``standing`` because it does not depend on the bookshelf.
+    # Unit: metres; sigma_h=sigma_r=sigma_s=stationary_sigma_m.
+    stationary_sigma_m: 0.5
+    social_weight_stationary: 0.5
+    social_weight_crossing: 0.5
+    # ``standing`` object pose, metres in the same expected_frame as Block B.
+    # For the Gazebo bookshelf test, its centre is at world/odom (0, 0).
+    # d_obj=hypot(x_obj-x_person, y_obj-y_person) is calculated every callback.
+    standing_object_x_m: 0.0
+    standing_object_y_m: 0.0
+    standing_object_label: bookshelf
+    # RViz-only physical envelope of the static Gazebo bookshelf.  This is
+    # deliberately separate from standing_object_(x,y): the latter is the
+    # semantic point that the person looks toward, whereas this CUBE is the
+    # full collision volume seen during RL.  All values are metres/radians in
+    # expected_frame.  Set enabled=false on a real scene with no such shelf.
+    static_obstacle_marker_enabled: true
+    static_obstacle_marker_center_x_m: 0.0
+    static_obstacle_marker_center_y_m: -0.195
+    static_obstacle_marker_center_z_m: 0.60
+    static_obstacle_marker_size_x_m: 0.90
+    static_obstacle_marker_size_y_m: 0.40
+    static_obstacle_marker_size_z_m: 1.20
+    static_obstacle_marker_yaw_rad: 0.0
     marker_lifetime_s: 0.75

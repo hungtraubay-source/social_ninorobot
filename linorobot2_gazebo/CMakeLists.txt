@@ -33,7 +33,10 @@ if(NOT SCRIPT_RESULT EQUAL 0)
 endif()
 
 install(
-  DIRECTORY launch rviz worlds
+  # `models` contains hand-authored static Gazebo assets.  Install it beside
+  # the generated map models so the package's environment hook can expose all
+  # model:// URIs through GAZEBO_MODEL_PATH.
+  DIRECTORY launch rviz worlds models
   DESTINATION share/${PROJECT_NAME}
 )
 

@@ -16,3 +16,7 @@ social_velocity_filter:
     collision_clearance: 0.7
     predicted_stop_clearance: 0.48
     people_timeout: 0.35
+    # /people normally uses map. Convert it to base_link before comparison
+    # with cmd_vel, whose linear components are in base_link (metres, m/s).
+    base_frame: base_link
+    transform_timeout_s: 0.10

@@ -1,7 +1,12 @@
-<!-- Replan at 2 Hz for dynamic social spaces; never wait for people to disperse. -->
+<!-- Replan at 2 Hz for dynamic social spaces.  A person can temporarily close a
+     corridor, so recovery waits first instead of immediately rotating/backing
+     into the person; RoundRobin still reaches the ordinary recoveries later. -->
 <root main_tree_to_execute="MainTree">
   <BehaviorTree ID="MainTree">
-    <RecoveryNode number_of_retries="8" name="SocialNavigateRecovery">
+    <!-- Forty attempts retain the navigation goal while a 12 s crossing actor
+         clears the route.  Each failed follow-path cycle returns to the 2 Hz
+         planner, so the social costmap is evaluated again after every action. -->
+    <RecoveryNode number_of_retries="40" name="SocialNavigateRecovery">
       <PipelineSequence name="NavigateWithFastSocialReplanning">
         <RateController hz="2.0">
           <RecoveryNode number_of_retries="1" name="ComputeSocialDetour">
@@ -19,6 +24,9 @@
       <ReactiveFallback name="SocialRecoveryFallback">
         <GoalUpdated/>
         <RoundRobin name="SocialRecoveryActions">
+          <!-- Dynamic social obstacle: hold position for 2 s, then let the
+               pipeline recompute from fresh /people and social-layer data. -->
+          <Wait wait_duration="2"/>
           <Sequence name="ClearBothCostmaps">
             <ClearEntireCostmap name="ClearLocalCostmap"
               service_name="local_costmap/clear_entirely_local_costmap"/>

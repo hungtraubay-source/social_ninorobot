@@ -18,11 +18,12 @@ Tách như vậy để: khi chạy thật không có gì để spawn nên social
 nguyên xi, còn khi mô phỏng thì bạn chủ động chọn thời điểm người xuất hiện và
 đổi kịch bản mà không phải khởi động lại perception.
 
-Hai kịch bản có sẵn, chọn bằng tham số `scenario:` của social_sim.launch.py:
+Bốn kịch bản có sẵn, chọn bằng tham số `scenario:` của social_sim.launch.py:
 
     scenario:=talking     người ĐỨNG NÓI CHUYỆN (tĩnh, mặc định)
     scenario:=gathering   người DI CHUYỂN (đi vào - nói chuyện - tản ra - lặp)
     scenario:=crossing    MỘT người đi ngang qua trước camera (lặp lại)
+    scenario:=standing    MỘT người đứng yên, khóa animation, tại Gazebo world (0, -1.4)
 
 Perception xuất ra một topic mà SocialLayer dùng để dựng costmap:
 
@@ -34,13 +35,12 @@ Topic dataset/debug độc lập với Nav2:
     /people/orientation   body-yaw + cờ valid theo track_id
     /people/tracked_state_json  Block-B: vị trí, vận tốc, motion heading,
                                  body orientation từ keypoints và quỹ đạo
-                                 constant-velocity trong frame map
-    /social_constraints/current_grid Block-D: Gaussian asymmetric tại t_now
-                                 (OccupancyGrid, chưa nối vào Nav2)
-    /social_constraints/prediction_layers Block-D: các grid dự báo t_now+dt,
-                                 mỗi layer giữ riêng dt_s cho E/F
-    /social_constraints/grid    Block-D debug: envelope gộp current + prediction
-    /social_constraints/markers Block-D debug: ellipse hiện tại/dự báo cho RViz
+                                 constant-velocity trong frame odom (Gazebo)
+    /social_constraints/current_grid Block-D: grid hiện tại, chỉ phát nếu
+                                 publish_cost_grid=true (mặc định false)
+    /social_constraints/grid    Block-D: alias cùng current_grid, optional
+    /social_constraints/markers Block-D: vòng đồng mức 90%..15% hiện tại + nhãn sigma;
+                                 talking dùng một vòng chung cho đúng hai người
     /social_perception/vlm_person_states  Block-VLM: JSON semantic theo từng
                                  ByteTrack ID từ 4 frame RGB; node này optional
                                  và chưa được Block-D dùng để tạo group cost
@@ -48,8 +48,10 @@ Topic dataset/debug độc lập với Nav2:
                                    perception xoá track cũ, không vẽ ghost person
 
 Trong RViz, `/social_perception/person_markers` vẽ đường và các chấm cyan dự
-báo vị trí người tại 0.50, 1.00, 1.50 và 2.00 giây trong frame `map`. Chúng chỉ hiện
-khi tốc độ tracker đạt ít nhất `prediction_min_speed_mps` (mặc định 0.10 m/s).
+báo vị trí người tại 0.50, 1.00, 1.50 và 2.00 giây trong frame `odom` ở Gazebo.
+SocialLayer tự đổi chúng sang frame costmap (`map` ở global, `odom` ở local).
+Chúng chỉ hiện khi tốc độ tracker đạt ít nhất `prediction_min_speed_mps`
+(mặc định 0.10 m/s).
 
 -------------------------------------------------------------------------------
  THỨ TỰ CHẠY CHUNG (4 TERMINAL)
@@ -107,11 +109,33 @@ costmap thêm/xóa từng người theo detection.
  TRƯỜNG HỢP 3 - MỘT NGƯỜI ĐI NGANG QUA CAMERA  (terminal 3)
 -------------------------------------------------------------------------------
 
-`walker_1` đi theo đường y=-2 (A) -> y=+2 (B) tại x=0. Đến B, actor được
-dịch chuyển ngay về A rồi đi tiếp tới B (không đi ngược B -> A). Đây là
-scenario để kiểm tra body-yaw, vận tốc và quỹ đạo dự báo với đúng một người.
+`walker_1` đi theo đường y=-2 (A) -> y=+2 (B) tại world x=+1. Với spawn robot
+mặc định ở world x=-3, đường này xấp xỉ map x=+4: vùng sàn rộng sau cửa hẹp,
+để Nav2 còn không gian lách tránh thay vì người bị ép đúng giữa lối đi. Đến B,
+actor được dịch chuyển ngay về A rồi đi tiếp tới B (không đi ngược B -> A).
+Đây là scenario để kiểm tra body-yaw, vận tốc và quỹ đạo dự báo với đúng một
+người.
 
     ros2 launch social_navigation social_sim.launch.py scenario:=crossing
+
+-------------------------------------------------------------------------------
+ TRƯỜNG HỢP 4 - MỘT NGƯỜI ĐỨNG YÊN (terminal 3)
+-------------------------------------------------------------------------------
+
+Actor `m_sweater` đứng tại Gazebo `world` (0, -1.4), hướng +y nhìn kệ sách
+tại (0,0), feet đặt trên sàn cafe. Đây là scenario để kiểm tra Gaussian tĩnh.
+Model không có clip
+`idle`, nên plugin khóa clip `talk` tại frame 0: tay và thân không cử động,
+giúp đầu vào RGB-D ổn định hơn.
+
+    ros2 launch social_navigation social_sim.launch.py scenario:=standing
+
+`scenario/state` phát `standing`. Khởi động Block D với mode `standing`.
+Tâm là người, trục dài quay từ người tới kệ sách; không dùng vận tốc/yaw nhiễu:
+
+    ros2 launch social_perception social_constraint_grounding.launch.py \
+      expected_frame:=odom use_sim_time:=true \
+      social_state:=standing
 
 Chu kỳ mặc định 96 giây: đi tới 8s, nói chuyện 60s, tản ra 8s, khuất camera 20s.
 Nếu cần giữ người trong khung lâu hơn để kiểm tra tracking, sửa trong
@@ -294,23 +318,87 @@ Fixed Frame là `map` cho cả hai môi trường.
  BLOCK D - GROUNDING BLOCK-B THÀNH TRƯỜNG RÀNG BUỘC XÃ HỘI
 -------------------------------------------------------------------------------
 
-Node D chạy độc lập để kiểm tra hình học trước khi nối nó vào costmap/Safety
-Shield. Nó đọc `/people/tracked_state_json`, bắt buộc dữ liệu nằm trong `map`,
-và phát current OccupancyGrid, prediction layers có dt_s, cùng Marker ellipse.
-Công thức baseline nằm đúng hai hàm
-`make_zones_for_person()` và `zone_cost()` trong
-`social_perception/scripts/social_constraint_grounding.py` để thay bằng công
-thức nghiên cứu sau này.
+Node D mặc định vẽ các vòng đồng mức 90/75/60/45/30/15% đỉnh, không phát
+heatmap (publish_cost_grid=false). Input /people/tracked_state_json là
+std_msgs/String, chứa vị trí/vận tốc theo track_id trong cùng expected_frame.
+D bỏ qua prediction.trajectory_m; không tạo vùng tương lai.
 
-    # Terminal mới, sau khi Block-B/perception đang chạy
-    ros2 launch social_perception social_constraint_grounding.launch.py
+Chọn social_state trong social_perception/config/social_constraint_grounding.yaml:
+    auto (mặc định): 1 track -> crossing; 2 track -> một cặp talking;
+                    0 hoặc >2 track -> xoá vòng, không tự chọn cặp
+    talking: đúng HAI track -> MỘT Gaussian chung, w=0.9
+    crossing: mỗi người một Gaussian theo vận tốc, w=0.5
+    standing: đúng MỘT người nhìn object YAML, Gaussian ellipse, w=0.7
+    stationary: đúng MỘT người, Gaussian tròn cố định, w=0.5
+Auto chọn case theo SỐ NGƯỜI Block B nhận được, không nhận diện hành vi thật.
+Hai người bất kỳ sẽ được coi là cặp talking trong chế độ thử này. Khi một
+người bị che/mất depth, auto có thể chuyển về crossing; chọn talking thủ công
+nếu cần bắt buộc giữ điều kiện hai người. Khi đổi scenario, giữ nguyên auto
+và D đang chạy; không cần chỉnh YAML/restart D mỗi lần.
+Talking cần hai ID khác nhau, vị trí hữu hạn và khoảng cách >1e-6 m. Nếu
+thiếu người, nhiều hơn hai người hoặc cặp không hợp lệ, D xoá vòng chung;
+không giữ người mất dấu, không ghép cặp tuỳ tiện, không cần body-yaw.
 
-Trong RViz (Fixed Frame `map`): Add -> Map ->
-`/social_constraints/current_grid`; thêm MarkerArray ->
-`/social_constraints/markers`. Vùng đỏ là Gaussian hiện tại, cam là các mốc
-dự báo. `/social_constraints/grid` chỉ là envelope debug gộp mọi thời điểm;
-E/F phải đọc `/social_constraints/prediction_layers` để không mất dt_s. Đây
-chỉ là debug field; Nav2 vẫn dùng SocialLayer qua `/people`.
+Với talking:
+    sep = hypot(x2-x1, y2-y1)                  # mét, khoảng cách hai tâm
+    centre = ((x1+x2)/2, (y1+y2)/2)           # cùng frame với Block B
+    yaw = atan2(y2-y1, x2-x1)                 # rad, trục nối hai người
+    sigma_h = sigma_r = [1+a*(1-c)]*(sep+d0)/4
+    sigma_s = sigma_h/3
+Công thức dùng (sep+d0)/4.
+Tâm chung thay hai Gaussian cá nhân trong case talking; không cộng trùng.
+Với sep=1.5 m, a=.1, c=.9, d0=.5 m: h=r=.505 m, s=.168 m.
+Vòng ngoài 15% dài khoảng 1.97 m, rộng .66 m; nhãn PAIR ghi ID, sep, sigma
+và kích thước vòng NGOÀI. Công thức talking vẫn có thể tạo vùng lớn.
+
+Crossing giữ hình học cá nhân:
+    sigma_h = [1+a*(1-c)]*(d0+k*vh), sigma_s=sigma_r=sigma_h/3
+Standing dùng công thức người-vật, với `d_obj` là khoảng cách người tới kệ:
+    yaw = atan2(y_obj-y_person, x_obj-x_person)
+    sigma_h = sigma_r = [1+a*(1-c)]*(d_obj+d0)/2
+    sigma_s = sigma_h/3
+Stationary không dùng vận tốc, body-yaw hay bookshelf:
+    sigma_h = sigma_r = sigma_s = stationary_sigma_m = 0.5 m
+    yaw = 0 (vòng tròn nên yaw không ảnh hưởng)
+YAML contour_levels: [0.90, 0.75, 0.60, 0.45, 0.30, 0.15] chọn vòng hiển thị.
+Mỗi vòng alpha có bán trục sigma*sqrt(-2*ln(alpha)); vòng ngoài 15% ~=1.948*sigma.
+Các mức tính theo đỉnh đã nhân trọng số: talking đỉnh 90 -> 15% là cost 13.5;
+crossing đỉnh 50 -> 15% là cost 7.5, trước làm tròn. Không phải ngưỡng cost 15.
+D vẽ đường đỏ, nhãn % trên từng vòng, không tô heatmap. Đặt contour_levels:
+[0.15] để chỉ xem vòng ngoài. Các đường này không cắt đuôi Gaussian về 0.
+zone_cost() vẫn tính C=maximum_cost*w_state*exp(-q/2), q=(u/sigma)^2+(v/sigma_s)^2.
+Nếu chủ động bật publish_cost_grid=true, /current_grid và /grid phát cùng
+nav_msgs/OccupancyGrid hiện tại; làm tròn/lọc integer cost và giới hạn grid
+có thể làm mất phần đuôi rất nhỏ. Mặc định không tính hoặc publish grid.
+
+    # Terminal scenario: Ctrl+C crossing trước nếu đang chạy, rồi thả cặp
+    ros2 launch social_navigation social_sim.launch.py scenario:=talking
+
+    # Terminal D: YAML mặc định social_state: auto, chỉ cần khởi động một lần
+    ros2 launch social_perception social_constraint_grounding.launch.py \
+      expected_frame:=odom use_sim_time:=true
+
+Trong RViz: tắt các Map /social_constraints/current_grid và /social_constraints/grid
+để xoá heatmap cũ; bật MarkerArray /social_constraints/markers. Block D vẽ
+vòng đỏ trong namespace social_constraint_contours, tâm/người màu vàng và
+nhãn social_constraint_info. Namespace static_obstacles là khối nâu biểu diễn
+đúng collision envelope của bookshelf Gazebo (0.90 x 0.40 x 1.20 m, tâm
+(0, -0.195, 0.60) trong odom), nên dùng để quan sát/debug RL mà không cần Nav2.
+Marker dùng cùng frame/timestamp với Block B. Fixed Frame có thể là map nếu TF
+nối map với odom, hoặc odom để xem trực tiếp.
+Chạy thật: expected_frame:=map use_sim_time:=false; không dùng Gazebo ground truth.
+Để đổi scenario: Ctrl+C terminal social_sim, rồi chạy lại scenario:=crossing,
+scenario:=talking hoặc scenario:=standing. Giữ D với social_state: auto; 1
+1 người mặc định dùng crossing; chạy `social_state:=standing` để dùng ellipse
+người-tới-kệ;
+frame hợp lệ tiếp theo sẽ tự chọn hình học. Các chế độ thủ công vẫn dùng được
+khi chỉnh YAML và restart D.
+
+    ros2 topic echo /people/tracked_state_json --once
+    ros2 topic echo /social_constraints/markers --once
+    ros2 run tf2_ros tf2_echo map odom
+
+Nav2 vẫn dùng SocialLayer qua /people. D chưa nối vào navigation/control.
 
 -------------------------------------------------------------------------------
  DỌN DẸP KHI KẸT

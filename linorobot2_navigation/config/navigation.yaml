@@ -266,19 +266,21 @@ global_costmap:
         # Published by social_perception running on the workstation.
         # Each detected person is costed independently.
         people_topic: /people
-        # Gaussian social field; height is along the person's motion, width lateral.
+        # Soft social preference for global routing. VoxelLayer keeps the body
+        # itself blocked, so this field must not turn all personal space into a
+        # lethal wall when the robot has room to pass in a narrow corridor.
         cutoff: 10.0
-        amplitude: 255.0
-        covariance_front_height: 0.4
-        covariance_front_width: 0.25
-        covariance_rear_height: 0.25
-        covariance_rear_width: 0.25
-        covariance_right_height: 0.3
-        covariance_right_width: 0.2
-        covariance_when_still: 0.25
+        amplitude: 200.0
+        covariance_front_height: 0.25
+        covariance_front_width: 0.16
+        covariance_rear_height: 0.16
+        covariance_rear_width: 0.16
+        covariance_right_height: 0.18
+        covariance_right_width: 0.15
+        covariance_when_still: 0.12
         use_passing: true
         use_vel_factor: true
-        speed_factor_multiplier: 5.0
+        speed_factor_multiplier: 2.0
         velocity_still_threshold: 0.1
         publish_occgrid: true
         # People detected over WiFi arrive later than in simulation. Keep a
@@ -369,18 +371,20 @@ local_costmap:
         plugin: "social_navigation::SocialLayer"
         enabled: true
         people_topic: /people
+        # Local DWB needs a passable gradient to steer around a person. The
+        # RGB-D VoxelLayer still forbids collision with the body itself.
         cutoff: 10.0
-        amplitude: 255.0
-        covariance_front_height: 0.4
-        covariance_front_width: 0.25
-        covariance_rear_height: 0.25
-        covariance_rear_width: 0.25
-        covariance_right_height: 0.3
-        covariance_right_width: 0.2
-        covariance_when_still: 0.25
+        amplitude: 200.0
+        covariance_front_height: 0.25
+        covariance_front_width: 0.16
+        covariance_rear_height: 0.16
+        covariance_rear_width: 0.16
+        covariance_right_height: 0.18
+        covariance_right_width: 0.15
+        covariance_when_still: 0.12
         use_passing: true
         use_vel_factor: true
-        speed_factor_multiplier: 5.0
+        speed_factor_multiplier: 2.0
         velocity_still_threshold: 0.1
         publish_occgrid: true
         data_timeout: 1.5
