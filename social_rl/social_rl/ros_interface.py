@@ -19,9 +19,7 @@ from rclpy.qos import (QoSDurabilityPolicy, QoSHistoryPolicy, QoSProfile,
                        QoSReliabilityPolicy)
 from rclpy.time import Time
 from sensor_msgs.msg import LaserScan
-from social_perception.msg import (ConstraintField as ConstraintFieldMsg,
-                                   People, Zone as ZoneMsg,
-                                   ZoneSample as ZoneSampleMsg)
+from social_perception.msg import People
 from tf2_ros import TransformException
 
 from social_rl.constraint_field import compile_zones, intrusion_at_zones
@@ -47,12 +45,6 @@ class EnvConfig:
     # /cmd_vel instead, so the filter stays as the last line of defence there.
     cmd_vel_topic: str = '/cmd_vel_safe'
     scan_topic: str = '/scan'
-
-    # Where block D's compiled zones go out. Block F is the consumer; RViz and
-    # anybody debugging a run are the other two. Published from wherever the
-    # zones were compiled, which is once per control step either in training or
-    # in the deployment agent.
-    constraint_field_topic: str = '/social_rl/constraint_field'
 
     # Where blocks B and C come from.
     #
@@ -593,14 +585,10 @@ class PerceptionBridge:
         node.create_subscription(Odometry, env_config.odom_topic,
                                  self._on_odom, sensor_qos)
 
-        # Block D's output, published from the one place it is already
-        # compiled. Block F subscribes to this rather than compiling its own
-        # copy: two compilations of the same people list drift the moment one
-        # of them is handed a message the other did not see, and a shield
-        # arguing with the policy about where a region is defeats the point of
-        # having a shield.
-        self._field_pub = node.create_publisher(
-            ConstraintFieldMsg, env_config.constraint_field_topic, 10)
+        # Block D no longer publishes from here. In training the field is an
+        # in-process grid (constraint_field.py) that feeds the observation and
+        # the reward directly; on the robot the Gaussian grounding node in
+        # social_perception owns the field and its markers.
 
     def _on_scan(self, msg):
         self.scan = msg
@@ -740,57 +728,20 @@ class PerceptionBridge:
                                    person.pose.position.y)
             vx, vy = rotate_vector(transform, person.velocity.linear.x,
                                    person.velocity.linear.y)
-            # Facing and scene_type are what block C fills in. A tracker that
-            # publishes neither leaves facing at 0 and scene_type empty, and
-            # block D falls back to its neutral region -- the observation keeps
-            # its shape either way, so a policy does not stop loading the day
-            # the VLM is switched off.
+            # Person.msg is tracking only now: id, pose, velocity. scene_type is
+            # left empty here and the social field the policy sees comes from
+            # block D's grounding node, not from a per-person label on this
+            # message. facing is still the tracked body orientation.
             if (self._env.people_camera_only
                     and not visible_to_camera(x, y, self._env)):
                 continue
             people.append(RelativeEntity(
                 x, y, vx, vy,
                 facing=quaternion_to_yaw(person.pose.orientation) + transform_yaw,
-                scene_type=person.scene_type,
+                scene_type='',
                 track_id=person.id,
-                scene_confidence=person.scene_confidence))
+                scene_confidence=0.0))
         return people
-
-    def _publish_field(self, field):
-        """Put block D's zones on the wire for block F and for RViz.
-
-        Frame is the robot frame, which is what the zones are already in, so a
-        consumer needs no TF to act on them. Stamped with the node clock rather
-        than with a sensor stamp: the zones are a statement about now, compiled
-        from whatever the newest people message was, and dating them by that
-        message would make a shield reject its own input as stale during the
-        gap between camera frames.
-        """
-        message = ConstraintFieldMsg()
-        message.header.stamp = self._node.get_clock().now().to_msg()
-        message.header.frame_id = self._observation.robot_frame
-        message.horizon_steps = int(field.horizon_steps)
-        message.dt = float(field.dt)
-        for zone in field.zones:
-            entry = ZoneMsg()
-            entry.zone_id = zone.zone_id
-            entry.track_ids = list(zone.track_ids)
-            entry.scene_type = zone.scene_type
-            entry.confidence = float(zone.confidence)
-            entry.hardness = zone.hardness
-            entry.valid_from = float(zone.valid_from)
-            entry.valid_to = float(zone.valid_to)
-            for sample in zone.trajectory_of_zone:
-                item = ZoneSampleMsg()
-                item.t = float(sample.t)
-                item.shape = sample.shape
-                item.center = [float(value) for value in sample.center]
-                item.size = [float(value) for value in sample.size]
-                item.core = float(sample.core)
-                item.orientation = float(sample.orientation)
-                entry.trajectory_of_zone.append(item)
-            message.zones.append(entry)
-        self._field_pub.publish(message)
 
     def goal_transform(self):
         """goal_frame -> robot_frame. The goal and PeopleMemory both ride it."""
@@ -869,7 +820,6 @@ class PerceptionBridge:
         # Block D. The channels come off `shown`, so the policy sees exactly
         # the situation its perception describes -- including a misread one.
         field = compile_zones(shown, self._observation.constraint_field)
-        self._publish_field(field)
         observation = build_observation(
             ObservationInput(scan_points=scan_xy,
                              goal_x=goal_x, goal_y=goal_y,

@@ -35,6 +35,7 @@ from rclpy.qos import (QoSDurabilityPolicy, QoSHistoryPolicy, QoSProfile,
                        QoSReliabilityPolicy)
 from rclpy.time import Time
 from social_perception.msg import People
+from std_msgs.msg import String
 
 from social_rl.observation import RelativeEntity
 from social_rl.ros_interface import visible_to_camera
@@ -43,7 +44,22 @@ from social_rl.ros_interface import visible_to_camera
 # separately, because "I could not tell" is a different failure from "I read it
 # wrong", and block D treats it differently -- '' selects the neutral (1,1,1)
 # scales rather than another situation's shape.
-VLM_LABELS = ('talking', 'backs_turned', 'passing', 'walking')
+VLM_LABELS = ('talking', 'passing', 'standing', 'walking')
+
+# The plugin no longer carries scene_type on Person.msg (block B is tracking
+# only). During training the situation is the scenario the trainer asked for,
+# read straight off /animated_people/scenario. Map every spawn name onto one of
+# block D's three geometries; the manual crossing/approaching commands and the
+# unused legacy names fall back sensibly.
+_SCENARIO_SCENE_TYPE = {
+    'talking': 'talking',
+    'passing': 'passing',
+    'crossing': 'passing',
+    'approaching': 'passing',
+    'standing': 'standing',
+    'none': '',
+    '': '',
+}
 
 
 class SimulatedVLM:
@@ -173,10 +189,16 @@ class GroundTruthPeople:
             durability=QoSDurabilityPolicy.VOLATILE)
         self.people = None
         self.states = None
+        # scene_type source: the scenario the trainer is running. Latched so a
+        # reset that re-sends the same name still leaves it set for the first
+        # step. '' until the first scenario message, which is the neutral shape.
+        self._scene_type = ''
         node.create_subscription(People, env_config.ground_truth_people_topic,
                                  self._on_people, 10)
         node.create_subscription(ModelStates, env_config.model_states_topic,
                                  self._on_states, latest)
+        node.create_subscription(String, env_config.scenario_topic,
+                                 self._on_scenario, 10)
         # Block C, simulated. Lives here rather than in ros_interface because
         # it is a simulation-only corruption of a simulation-only truth, and
         # the robot must never grow a copy of it: its block C will be wrong on
@@ -188,6 +210,13 @@ class GroundTruthPeople:
 
     def _on_states(self, message):
         self.states = message
+
+    def _on_scenario(self, message):
+        # The command is "<name>" or "<name> route x0 y0 x1 y1"; only the name
+        # decides the geometry. An unknown name keeps the previous type rather
+        # than blanking a scene mid-episode.
+        name = message.data.split()[0].strip().lower() if message.data else ''
+        self._scene_type = _SCENARIO_SCENE_TYPE.get(name, self._scene_type)
 
     def ready(self) -> bool:
         """Both feeds have arrived at least once.
@@ -274,9 +303,12 @@ class GroundTruthPeople:
                 # is looking. The constraint field's asymmetric regions are
                 # built in the robot frame, so this has to be too.
                 facing=_wrap(_yaw(person.pose.orientation) - robot_yaw),
-                scene_type=person.scene_type,
+                # scene_type comes from the running scenario now, not from the
+                # message. confidence is 1.0: the situation is known here, not
+                # inferred. SimulatedVLM still corrupts both downstream.
+                scene_type=self._scene_type,
                 track_id=person.id,
-                scene_confidence=person.scene_confidence))
+                scene_confidence=1.0))
         return people
 
     def corrupt(self, people, now):
