@@ -6,9 +6,9 @@ find_package(ament_cmake_python REQUIRED)
 find_package(rclpy REQUIRED)
 find_package(rclcpp REQUIRED)
 find_package(std_msgs REQUIRED)
-find_package(social_perception REQUIRED)
 find_package(gazebo REQUIRED)
 find_package(gazebo_ros REQUIRED)
+find_package(social_perception REQUIRED)
 
 add_library(animated_people_release SHARED
   src/animated_people_release.cpp)
@@ -33,10 +33,7 @@ if(NOT SCRIPT_RESULT EQUAL 0)
 endif()
 
 install(
-  # `models` contains hand-authored static Gazebo assets.  Install it beside
-  # the generated map models so the package's environment hook can expose all
-  # model:// URIs through GAZEBO_MODEL_PATH.
-  DIRECTORY launch rviz worlds models
+  DIRECTORY launch rviz worlds
   DESTINATION share/${PROJECT_NAME}
 )
 

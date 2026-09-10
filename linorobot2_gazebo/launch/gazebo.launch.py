@@ -13,6 +13,7 @@
 # limitations under the License.
 
 import os
+from ament_index_python.packages import get_package_share_directory
 from launch import LaunchDescription
 from launch.actions import (DeclareLaunchArgument, ExecuteProcess,
                             IncludeLaunchDescription, SetEnvironmentVariable,
@@ -45,15 +46,24 @@ def generate_launch_description():
         if is_model_root:
             gazebo_model_paths.append(path)
 
+    # sdformat rewrites the URDF's `package://<pkg>/...` mesh URIs to
+    # `model://<pkg>/...`, so the parent of each package's share directory has
+    # to stay on the path or every STL in the robot ends up "No mesh specified".
+    for pkg in ('linorobot2_description',):
+        share_parent = os.path.dirname(get_package_share_directory(pkg))
+        if share_parent not in gazebo_model_paths:
+            gazebo_model_paths.append(share_parent)
+
     ekf_config_path = PathJoinSubstitution(
         [FindPackageShare("linorobot2_base"), "config", "ekf.yaml"]
     )
 
     world_path = PathJoinSubstitution(
-        [FindPackageShare("linorobot2_gazebo"), "worlds", "lirs_test.world"]
+        [FindPackageShare("linorobot2_gazebo"), "worlds", "bookstore.world"]
     )
 
-    # Models used by the animated-people plugin in lirs_test.world.
+    # Character meshes the animated-people plugin loads for the actors in
+    # lirs_test.world.
     social_models_path = PathJoinSubstitution(
         [FindPackageShare("social_navigation"), "models"]
     )
@@ -95,21 +105,27 @@ def generate_launch_description():
         ),
 
         DeclareLaunchArgument(
-            name='rviz', 
+            name='rviz',
             default_value='false', # Mặc định là bật, đổi thành 'false' nếu muốn mặc định tắt
             description='Launch RViz'
+        ),
+
+        DeclareLaunchArgument(
+            name='gui',
+            default_value='true',
+            description='Open the Gazebo 3D window (gzclient). false runs headless'
+        ),
+
+        DeclareLaunchArgument(
+            name='gpu_render',
+            default_value='true',
+            description='Render gzserver on the discrete GPU via PRIME offload'
         ),
 
         DeclareLaunchArgument(
             name='run_ekf',
             default_value='true',
             description='Run EKF localization'
-        ),
-
-        DeclareLaunchArgument(
-            name='publish_odom_tf',
-            default_value='false',
-            description='Let Gazebo diff-drive publish odom -> base_footprint; use only when run_ekf=false'
         ),
 
         DeclareLaunchArgument(
@@ -144,7 +160,7 @@ def generate_launch_description():
 
         DeclareLaunchArgument(
             name='spawn_y', 
-            default_value='0.0',
+            default_value='-2.0',
             description='Robot spawn position in Y axis'
         ),
 
@@ -162,9 +178,40 @@ def generate_launch_description():
             description='Robot spawn heading'
         ),
 
+        # gzserver and gzclient are started separately rather than through the
+        # `gazebo` wrapper so the PRIME offload below can apply to the server
+        # alone. The server is what rasterises the observer camera that feeds
+        # YOLO and the VLM; the client only draws a window a human looks at.
         ExecuteProcess(
-            cmd=['gazebo', '--verbose', '-s', 'libgazebo_ros_factory.so',  '-s', 'libgazebo_ros_init.so', LaunchConfiguration('world')],
-            output='screen'
+            cmd=['gzserver', '--verbose', '-s', 'libgazebo_ros_factory.so',
+                 '-s', 'libgazebo_ros_init.so', LaunchConfiguration('world')],
+            output='screen',
+            # This machine is `prime-select on-demand`, so OpenGL defaults to
+            # the Intel iGPU and the camera is rasterised on the CPU side while
+            # the Quadro sits idle between inferences. Offloading just the
+            # server moves that onto the Quadro for ~100 MiB of the 4 GiB card,
+            # which the 2 GiB left over after the VLM absorbs. Set
+            # gpu_render:=false to measure the difference.
+            additional_env={
+                '__NV_PRIME_RENDER_OFFLOAD': '1',
+                '__GLX_VENDOR_LIBRARY_NAME': 'nvidia',
+            },
+            condition=IfCondition(LaunchConfiguration('gpu_render'))
+        ),
+
+        ExecuteProcess(
+            cmd=['gzserver', '--verbose', '-s', 'libgazebo_ros_factory.so',
+                 '-s', 'libgazebo_ros_init.so', LaunchConfiguration('world')],
+            output='screen',
+            condition=UnlessCondition(LaunchConfiguration('gpu_render'))
+        ),
+
+        # The 3D window is the single largest CPU consumer in the sim and
+        # nothing in the pipeline reads from it. gui:=false when measuring.
+        ExecuteProcess(
+            cmd=['gzclient'],
+            output='screen',
+            condition=IfCondition(LaunchConfiguration('gui'))
         ),
 
         # Gazebo and robot_state_publisher start in parallel. Wait until the
@@ -202,8 +249,10 @@ def generate_launch_description():
         ),
 
         # The saved map is built by SLAM, whose origin is wherever the robot
-        # started, not the Gazebo world origin. Only z stays 0: the map is 2D
-        # and the navigation layers ignore height.
+        # started, not the Gazebo world origin. Publishing this edge as identity
+        # silently shifts everything anchored in `world` by the spawn offset
+        # once it is drawn on the map. Only z stays 0: the map is 2D and the
+        # layers ignore height.
         Node(
             package='tf2_ros',
             executable='static_transform_publisher',
@@ -219,6 +268,12 @@ def generate_launch_description():
             ],
             parameters=[{'use_sim_time': use_sim_time}]
         ),
+
+        # The camera used to be a static model in the world and needed two
+        # static transforms here to place it on the map. It is now a link of
+        # the robot, so robot_state_publisher owns
+        # base_link -> camera_link -> camera_depth_link and nothing about the
+        # camera is published from this launch any more.
 
         Node(
             package='rviz2',
@@ -255,8 +310,6 @@ def generate_launch_description():
                 'rviz': 'false',
                 'use_sim_time': str(use_sim_time),
                 'publish_joints': 'false',
-                'xacro_args': ['publish_odom_tf:=',
-                               LaunchConfiguration('publish_odom_tf')],
                 'urdf': LaunchConfiguration('urdf')
             }.items()
         ),

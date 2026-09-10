@@ -1,0 +1,32 @@
+# Chạy policy đã train TRONG MÔ PHỎNG.
+#
+# Chỉ chứa phần khác nhau giữa sim và robot thật (use_sim_time + tên topic).
+# Toàn bộ định nghĩa observation/hành động nằm trong <run_dir>/env_config.yaml
+# do train.py ghi ra cạnh model - node tự tìm file đó, đừng chép lại vào đây.
+social_rl_agent:
+  ros__parameters:
+    use_sim_time: true
+
+    # Bắt buộc truyền khi launch: model_path:=~/social_rl_runs/<run>/final_model.zip
+    model_path: ""
+    # Để trống thì node lấy env_config.yaml nằm cùng thư mục với model.
+    env_config: ""
+
+    # Trong RViz, đổi topic của nút "2D Goal Pose" sang /rl_goal_pose (Tool
+    # Properties) hoặc dùng ros2 topic pub như trong RUN_RL.txt. Không có Nav2
+    # nào chạy nên /goal_pose cũng bỏ trống: truyền goal_topic:=/goal_pose lúc
+    # launch là dùng được nút mặc định của RViz.
+    # Đích gửi vào đây mang frame_id nào cũng được, miễn node tra cứu TF sang
+    # env.goal_frame trong <run_dir>/env_config.yaml (mặc định `odom`) được.
+    # Muốn bấm đích trong frame `map` thì chạy launch với localization:=true,
+    # nếu không sẽ không có cạnh map -> odom và node báo lỗi TF rồi đứng yên.
+    goal_topic: /rl_goal_pose
+
+    # Ra /cmd_vel để social_velocity_filter vẫn đứng chắn phía sau policy
+    # (filter chuyển tiếp sang /cmd_vel_safe cho plugin diff_drive).
+    cmd_vel_topic: /cmd_vel
+
+    # Mạng nhỏ (LSTM 128 + 2x128), một lần forward dưới 1 ms trên CPU. Để cpu
+    # nhằm nhường trọn 4 GiB VRAM cho VLM đang chạy cùng lúc.
+    device: cpu
+    deterministic: true
