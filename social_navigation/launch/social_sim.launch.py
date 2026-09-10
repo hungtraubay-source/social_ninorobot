@@ -12,6 +12,7 @@ scenario:=gathering  the same two actors walk in from off camera, hold the
                      conversation, walk out, and repeat. Use it to check that
                      the costmap creates the region *and* clears it again.
 scenario:=crossing   one actor repeatedly walks across the RGB-D camera.
+scenario:=standing   one actor stays at world (0, -1.4) for a static test.
 
 wait_for_perception:=true holds the actors back until social_perception reports
 ready, for when you want to start both terminals at once anyway.
@@ -29,7 +30,7 @@ def generate_launch_description():
         DeclareLaunchArgument(
             'scenario',
             default_value='talking',
-            description='talking, gathering, or crossing (one person crosses the camera)'),
+            description='talking, gathering, crossing, or standing'),
         DeclareLaunchArgument(
             'wait_for_perception',
             default_value='false',

@@ -36,12 +36,14 @@ def main(args=None):
     # "gathering" : they walk in, talk, walk out, and repeat, so the costmap
     #               has to both create and remove the social region.
     # "crossing"  : one actor repeatedly walks across the RGB-D camera.
+    # "standing"  : one actor remains at the fixed bookshelf-test position.
     node.declare_parameter('scenario', 'talking')
     scenario = str(node.get_parameter('scenario').value).strip().lower()
     topics = {
         'talking': '/animated_people/release',
         'gathering': '/animated_people/gather',
         'crossing': '/animated_people/crossing',
+        'standing': '/animated_people/standing',
     }
     if scenario not in topics:
         node.get_logger().error(

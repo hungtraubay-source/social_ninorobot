@@ -530,3 +530,518 @@ def main(args: Optional[List[str]] = None) -> None:
 
 if __name__ == '__main__':
     main()
+
+
+# #!/usr/bin/env python3
+# """Block D: turn Block-B person state into a social constraint field.
+
+# The node deliberately has no Nav2 dependency.  It consumes the JSON exported
+# by Block B and publishes red Gaussian contours (optional debug grids). This
+# keeps the social geometry testable before it is connected to a costmap layer
+# or a safety shield.
+
+# ``make_talking_zone`` creates one symmetric Gaussian for exactly two people
+# when the experiment is labelled talking. Auto chooses crossing for one track
+# and talking for two, solely as a convenience for those two test scenarios;
+# it is not a semantic conversation detector. Manual modes remain available.
+# All positions are current Block-B measurements in expected_frame.
+# Future trajectories are ignored. Activity weights scale cost, not sigma.
+# The contours show fractions of each zone's weighted peak, from 90% down to
+# 15% by default. Their outer edge is not a truncation of the Gaussian.
+# """
+
+# import json
+# import math
+# from dataclasses import dataclass
+# from typing import Iterable, List, Optional, Tuple
+
+# import rclpy
+# from rclpy.node import Node
+# from std_msgs.msg import String
+# from geometry_msgs.msg import Point
+# from nav_msgs.msg import OccupancyGrid
+# from visualization_msgs.msg import Marker, MarkerArray
+
+
+# @dataclass(frozen=True)
+# class ConstraintZone:
+#     """One current social zone in the tracking frame (odom sim, map real).
+
+#     Front/rear/left/right dimensions are Gaussian standard deviations (m).
+#     Contour semi-axes are sigma*sqrt(-2*ln(level)). For a pair,
+#     yaw is along the line joining members and front/rear sigmas are equal.
+#     """
+
+#     track_id: int
+#     x_m: float
+#     y_m: float
+#     yaw_rad: float
+#     front_semi_axis_m: float
+#     rear_semi_axis_m: float
+#     left_semi_axis_m: float
+#     right_semi_axis_m: float
+#     # Semantic priority scales peak cost only. It has no units and never
+#     # changes the geometric sigmas or the relative-cost contours.
+#     social_state: str
+#     social_weight: float
+#     # Sorted ByteTrack IDs identify a pair independently of input list order.
+#     # Empty for individual zones; separation is measured centre-to-centre, m.
+#     member_ids: Tuple[int, ...] = ()
+#     separation_m: float = 0.0
+
+
+# class SocialConstraintGrounding(Node):
+#     """Block-B String JSON -> current individual/pair MarkerArray in its frame.
+
+#     No TF is invented here: incoming positions must already share
+#     expected_frame. Geometry is deterministic and does not invoke a VLM.
+#     """
+
+#     def __init__(self) -> None:
+#         super().__init__('social_constraint_grounding')
+
+#         # I/O contract. Block B publishes positions in expected_frame (odom sim, map real).
+#         self.declare_parameter('input_topic', '/people/tracked_state_json')
+#         # Both OccupancyGrid topics carry the same current field. Keep the
+#         # legacy /grid name so existing RViz displays show current zones too.
+#         self.declare_parameter('current_grid_topic', '/social_constraints/current_grid')
+#         self.declare_parameter('combined_grid_topic', '/social_constraints/grid')
+#         self.declare_parameter('output_markers_topic', '/social_constraints/markers')
+#         self.declare_parameter('expected_frame', 'map')
+#         # Default is outlines only, as requested. Enable this explicitly to
+#         # compute/publish OccupancyGrid heatmaps for a future cost consumer.
+#         self.declare_parameter('publish_cost_grid', False)
+
+#         # Fixed grid in the tracking frame. Keep it fixed so RViz and a future
+#         # costmap consumer do not see a jumping origin.
+#         self.declare_parameter('grid_resolution_m', 0.05)
+#         self.declare_parameter('grid_origin_x_m', -10.0)
+#         self.declare_parameter('grid_origin_y_m', -10.0)
+#         self.declare_parameter('grid_width_m', 20.0)
+#         self.declare_parameter('grid_height_m', 20.0)
+#         self.declare_parameter('maximum_cost', 100)
+#         self.declare_parameter('minimum_published_cost', 1)
+#         self.declare_parameter('combine_mode', 'max')  # max | sum_clamped
+
+#         # Crossing: sigma_h=[1+a*(1-c)]*(d0+k*|v|). Talking pair:
+#         # sigma_h=sigma_r=[1+a*(1-c)]*(sep+d0/4), sigma_s=sigma_h/3.
+#         # sep is Euclidean centre-to-centre distance in metres. d0 is metres,
+#         # k is seconds, a/c dimensionless. c is an explicit experiment value,
+#         # not detector confidence; side and rear sigma are sigma_h/3.
+#         self.declare_parameter('gaussian_d0_m', 0.5)
+#         self.declare_parameter('gaussian_a', 0.5)
+#         self.declare_parameter('gaussian_c', 0.9)
+#         self.declare_parameter('gaussian_k_s', 0.5)
+#         # Dimensionless fractions of EACH zone's weighted peak, not absolute
+#         # OccupancyGrid cost. Example: talking peak=90 -> 15% means cost=13.5.
+#         # Visual contours only: they do not truncate zone_cost or change sigma.
+#         self.declare_parameter('contour_levels', [0.90, 0.75, 0.60, 0.45, 0.30, 0.15])
+#         # Auto is scoped to the current tests: one track -> crossing, exactly
+#         # two -> talking pair. It does not recognise activities from images,
+#         # velocities or Gazebo state. Explicit labels override count selection.
+#         self.declare_parameter('social_state', 'auto')
+#         # Activity weights are fractions of maximum_cost, not probabilities.
+#         # Keep each in [0, 1] so OccupancyGrid stays within its 0..100 contract.
+#         self.declare_parameter('social_weight_talking', 0.9)
+#         self.declare_parameter('social_weight_waiting', 0.6)
+#         self.declare_parameter('social_weight_crossing', 0.5)
+#         self.declare_parameter('marker_lifetime_s', 0.75)
+
+#         self.gaussian_d0 = float(self.get_parameter('gaussian_d0_m').value)
+#         self.gaussian_a = float(self.get_parameter('gaussian_a').value)
+#         self.gaussian_c = float(self.get_parameter('gaussian_c').value)
+#         self.gaussian_k = float(self.get_parameter('gaussian_k_s').value)
+#         if (not all(math.isfinite(v) for v in (
+#                 self.gaussian_d0, self.gaussian_a, self.gaussian_c, self.gaussian_k))
+#                 or self.gaussian_d0 <= 0 or self.gaussian_a < 0
+#                 or self.gaussian_k < 0 or not 0 <= self.gaussian_c <= 1):
+#             raise ValueError('Gaussian requires d0>0, a/k>=0 and 0<=c<=1 (finite)')
+
+#         levels = [float(level) for level in self.get_parameter('contour_levels').value]
+#         if not levels or any(not math.isfinite(level) or not 0.0 < level < 1.0
+#                              for level in levels):
+#             raise ValueError('contour_levels must contain finite fractions between 0 and 1')
+#         # Inner -> outer order with no duplicated lines. The smallest level
+#         # defines the displayed extent; 15% corresponds to 1.948 sigma.
+#         self.contour_levels = sorted(set(levels), reverse=True)
+#         self.outer_contour_scale = math.sqrt(-2.0 * math.log(self.contour_levels[-1]))
+
+#         self.social_weights = {
+#             state: float(self.get_parameter(f'social_weight_{state}').value)
+#             for state in ('talking', 'waiting', 'crossing')
+#         }
+#         if any(not math.isfinite(weight) or not 0.0 <= weight <= 1.0
+#                for weight in self.social_weights.values()):
+#             raise ValueError('Social weights must be finite fractions in [0, 1]')
+#         self.social_state = str(self.get_parameter('social_state').value).strip().lower()
+#         if self.social_state not in ('auto', *self.social_weights):
+#             raise ValueError('social_state must be auto, talking, waiting or crossing')
+
+#         self.input_topic = self.get_parameter('input_topic').value
+#         self.expected_frame = self.get_parameter('expected_frame').value
+#         self.publish_cost_grid = bool(self.get_parameter('publish_cost_grid').value)
+#         self.grid_resolution_m = max(0.01, float(self.get_parameter('grid_resolution_m').value))
+#         self.grid_origin_x_m = float(self.get_parameter('grid_origin_x_m').value)
+#         self.grid_origin_y_m = float(self.get_parameter('grid_origin_y_m').value)
+#         self.grid_width_m = max(self.grid_resolution_m, float(self.get_parameter('grid_width_m').value))
+#         self.grid_height_m = max(self.grid_resolution_m, float(self.get_parameter('grid_height_m').value))
+#         self.maximum_cost = max(1, min(100, int(self.get_parameter('maximum_cost').value)))
+#         self.minimum_published_cost = max(1, min(self.maximum_cost,
+#                                                   int(self.get_parameter('minimum_published_cost').value)))
+#         self.combine_mode = self.get_parameter('combine_mode').value
+
+#         self.grid_width_cells = int(math.ceil(self.grid_width_m / self.grid_resolution_m))
+#         self.grid_height_cells = int(math.ceil(self.grid_height_m / self.grid_resolution_m))
+
+#         # Optional output: nav_msgs/OccupancyGrid (integer cost 0..100), in
+#         # expected_frame. No grid publishers or raster work in outline-only
+#         # mode; disable old RViz Map displays to remove their cached heatmaps.
+#         if self.publish_cost_grid:
+#             self.current_grid_pub = self.create_publisher(
+#                 OccupancyGrid, self.get_parameter('current_grid_topic').value, 1)
+#             self.combined_grid_pub = self.create_publisher(
+#                 OccupancyGrid, self.get_parameter('combined_grid_topic').value, 1)
+#         # RViz output: visualization_msgs/MarkerArray, positions in metres,
+#         # in expected_frame. Input std_msgs/String carries current Block-B JSON.
+#         self.markers_pub = self.create_publisher(
+#             MarkerArray, self.get_parameter('output_markers_topic').value, 1)
+#         self.subscription = self.create_subscription(
+#             String, self.input_topic, self.block_b_callback, 10)
+
+#         self.get_logger().info(
+#             f'Block D ready: {self.input_topic} -> '
+#             f'{self.get_parameter("output_markers_topic").value} (current only), '
+#             f'expected_frame={self.expected_frame}, '
+#             f'state_selection={self.social_state}, '
+#             f'publish_cost_grid={self.publish_cost_grid}, contours={self.contour_levels}')
+
+#     def block_b_callback(self, message: String) -> None:
+#         """Use one String snapshot to update outlines and optional grids.
+
+#         Header time/frame are preserved. DELETEALL clears the old pair when
+#         counts change. Auto may then show the remaining track as crossing;
+#         manual talking waits until both people are present again.
+#         """
+#         try:
+#             state = json.loads(message.data)
+#             frame_id = self.validate_block_b(state)
+#             zones = self.build_constraint_zones(state.get('people', []))
+#         except (TypeError, ValueError, KeyError, json.JSONDecodeError) as error:
+#             self.get_logger().warn(f'Ignoring invalid Block-B state: {error}')
+#             return
+
+#         stamp_ns = int(state.get('header', {}).get('stamp_ns', 0))
+#         # Optional grids share the current field; default only draws outlines.
+#         if self.publish_cost_grid:
+#             grid = self.make_grid(frame_id, stamp_ns, zones)
+#             self.current_grid_pub.publish(grid)
+#             self.combined_grid_pub.publish(grid)
+#         self.markers_pub.publish(self.make_markers(frame_id, stamp_ns, zones))
+
+#     def validate_block_b(self, state: dict) -> str:
+#         """Validate the small stable contract D needs from B."""
+#         header = state.get('header')
+#         if not isinstance(header, dict):
+#             raise ValueError('missing header')
+#         frame_id = header.get('frame_id')
+#         if frame_id != self.expected_frame:
+#             raise ValueError(
+#                 f'expected frame {self.expected_frame!r}, received {frame_id!r}; '
+#                 'transform in Block B before sending to D')
+#         people = state.get('people')
+#         if not isinstance(people, list):
+#             raise ValueError('people must be a list')
+#         return frame_id
+
+#     def build_constraint_zones(self, people: Iterable[dict]) -> List[ConstraintZone]:
+#         """Choose one talking pair OR individual zones for this experiment.
+
+#         Auto dispatches only the one-person and two-person test cases, using
+#         the current input count. It intentionally does not choose pairs from
+#         a crowd (>2) or infer talking from proximity. Brief occlusion can
+#         change a pair to individual geometry; use manual talking to require
+#         both members throughout. No history or extra future zones are kept.
+#         """
+#         people = list(people)
+#         selected_state = self.social_state
+#         if selected_state == 'auto':
+#             if len(people) not in (1, 2):
+#                 return []
+#             selected_state = 'talking' if len(people) == 2 else 'crossing'
+#         if selected_state == 'talking':
+#             if len(people) != 2:
+#                 return []
+#             try:
+#                 return [self.make_talking_zone(people[0], people[1])]
+#             except (TypeError, ValueError, KeyError) as error:
+#                 self.get_logger().warn(f'Skipping invalid talking pair: {error}')
+#                 return []
+#         zones: List[ConstraintZone] = []
+#         for person in people:
+#             try:
+#                 zones.extend(self.make_zones_for_person(person))
+#             except (TypeError, ValueError, KeyError) as error:
+#                 self.get_logger().warn(f'Skipping malformed person: {error}')
+#         return zones
+
+#     def make_talking_zone(self, first: dict, second: dict) -> ConstraintZone:
+#         """Two current Block-B positions -> one symmetric talking Gaussian.
+
+#         position_m is in expected_frame (metres); track_id is a ByteTrack ID.
+#         Group centre is the midpoint. atan2(dy, dx) orients the long axis
+#         along the pair, independent of unreliable body yaw for still people.
+#         sep=hypot(dx,dy) is the FULL centre-to-centre separation, not sep/2.
+#         The user's formula is factor*(sep+d0/4), not factor*(sep+d0)/4.
+#         Front/rear symmetry means swapping people cannot change the field.
+#         """
+#         # Sorting fixes the displayed identity/yaw when B changes list order.
+#         first, second = sorted((first, second), key=lambda p: int(p['track_id']))
+#         first_id, second_id = int(first['track_id']), int(second['track_id'])
+#         x1, y1 = float(first['position_m']['x']), float(first['position_m']['y'])
+#         x2, y2 = float(second['position_m']['x']), float(second['position_m']['y'])
+#         if first_id == second_id or not all(math.isfinite(v) for v in (x1, y1, x2, y2)):
+#             raise ValueError('pair needs distinct track IDs and finite positions')
+#         dx, dy = x2 - x1, y2 - y1
+#         separation_m = math.hypot(dx, dy)
+#         # Coincident centres have no pair axis; do not draw an invented yaw.
+#         if not math.isfinite(separation_m) or separation_m <= 1e-6:
+#             raise ValueError('pair centres must be separated by more than 1e-6 m')
+#         factor = 1.0 + self.gaussian_a * (1.0 - self.gaussian_c)
+#         sigma_h = sigma_r = factor * (separation_m + self.gaussian_d0 / 4.0)
+#         sigma_s = sigma_h / 3.0
+#         return ConstraintZone(
+#             first_id, x1 / 2.0 + x2 / 2.0, y1 / 2.0 + y2 / 2.0,
+#             math.atan2(dy, dx), sigma_h, sigma_r, sigma_s, sigma_s,
+#             'talking', self.social_weights['talking'],
+#             (first_id, second_id), separation_m)
+
+#     # ------------------------------------------------------------------
+#     # Crossing geometry from Block-B velocity and configured coefficients.
+#     # Inputs are current tracking-frame position/velocity/body yaw.
+#     # Output stays a list of ConstraintZone, so grid/RViz need no rewiring.
+#     # ------------------------------------------------------------------
+#     def make_zones_for_person(self, person: dict) -> List[ConstraintZone]:
+#         """Use tracking-frame velocity (m/s) for individual size and heading.
+
+#         Auto reaches this method only for the one-person crossing case;
+#         resolve its actual weight without changing the configured selector.
+#         """
+#         track_id = int(person['track_id'])
+#         position = person['position_m']
+#         velocity = person.get('velocity_mps', {})
+#         x_m = float(position['x'])
+#         y_m = float(position['y'])
+#         vx_mps = float(velocity.get('vx', 0.0))
+#         vy_mps = float(velocity.get('vy', 0.0))
+#         speed_mps = math.hypot(vx_mps, vy_mps)
+#         if not all(math.isfinite(v) for v in (x_m, y_m, vx_mps, vy_mps, speed_mps)):
+#             raise ValueError('non-finite position or velocity')
+#         # Crossing front follows velocity, including sideways walking. At rest
+#         # use valid body yaw; without any heading, skip rather than invent one.
+#         if speed_mps > 1e-6:
+#             yaw_rad = math.atan2(vy_mps, vx_mps)
+#         elif bool(person.get('body_orientation_valid', False)):
+#             yaw_rad = float(person['body_orientation_rad'])
+#         elif bool(person.get('motion_heading_valid', False)):
+#             yaw_rad = float(person['motion_heading_rad'])
+#         else:
+#             return []
+#         if not math.isfinite(yaw_rad):
+#             raise ValueError('non-finite heading')
+
+#         # Deliberately ignore prediction.trajectory_m: D visualises only the
+#         # measured current position, while speed still controls Gaussian size.
+#         selected_state = 'crossing' if self.social_state == 'auto' else self.social_state
+#         return [self.make_crossing_zone(
+#             track_id, x_m, y_m, yaw_rad, speed_mps, selected_state)]
+
+#     def make_crossing_zone(
+#             self, track_id: int, x_m: float, y_m: float,
+#             yaw_rad: float, speed_mps: float, social_state: str) -> ConstraintZone:
+#         """Compute sigma (m) and activity priority using the same geometry."""
+#         sigma_h = ((1.0 + self.gaussian_a * (1.0 - self.gaussian_c)) *
+#                    (self.gaussian_d0 + self.gaussian_k * speed_mps))
+#         sigma_s = sigma_r = sigma_h / 3.0
+#         return ConstraintZone(track_id, x_m, y_m, yaw_rad,
+#                               sigma_h, sigma_r, sigma_s, sigma_s,
+#                               social_state, self.social_weights[social_state])
+
+#     # ------------------------------------------------------------------
+#     # POLICY HOOK 2: replace this evaluator for a different K_soc(x, y, t).
+#     # It receives a cell and one current social zone and returns [0, 100].
+#     # ------------------------------------------------------------------
+#     def zone_cost(self, x_m: float, y_m: float, zone: ConstraintZone) -> int:
+#         """Evaluate maximum_cost*w_state*exp(-q/2) in the person's axes.
+
+#         q=(forward/sigma_front_or_rear)^2+(left/sigma_side)^2.
+#         There is no cutoff: displayed contours are visual references only.
+#         Only optional grid rasterisation rounds small tail costs to zero.
+#         """
+#         dx = x_m - zone.x_m
+#         dy = y_m - zone.y_m
+#         forward = math.cos(zone.yaw_rad) * dx + math.sin(zone.yaw_rad) * dy
+#         lateral = -math.sin(zone.yaw_rad) * dx + math.cos(zone.yaw_rad) * dy
+#         forward_axis = zone.front_semi_axis_m if forward >= 0.0 else zone.rear_semi_axis_m
+#         lateral_axis = zone.left_semi_axis_m if lateral >= 0.0 else zone.right_semi_axis_m
+#         normalized_distance_sq = (
+#             (forward / forward_axis) ** 2 +
+#             (lateral / lateral_axis) ** 2)
+
+#         return int(round(self.maximum_cost * zone.social_weight *
+#                          math.exp(-0.5 * normalized_distance_sq)))
+
+#     def make_grid(self, frame_id: str, stamp_ns: int,
+#                   zones: List[ConstraintZone]) -> OccupancyGrid:
+#         """Optional current cost raster sampled at cell centres in metres.
+
+#         maximum_cost*w*exp(-q/2) is rounded to 0..100; max or sum_clamped
+#         combines zones. The finite grid extent is not a Gaussian boundary.
+#         """
+#         grid = OccupancyGrid()
+#         grid.header.frame_id = frame_id
+#         grid.header.stamp.sec = stamp_ns // 1_000_000_000
+#         grid.header.stamp.nanosec = stamp_ns % 1_000_000_000
+#         grid.info.resolution = self.grid_resolution_m
+#         grid.info.width = self.grid_width_cells
+#         grid.info.height = self.grid_height_cells
+#         grid.info.origin.position.x = self.grid_origin_x_m
+#         grid.info.origin.position.y = self.grid_origin_y_m
+#         grid.info.origin.orientation.w = 1.0
+#         grid.data = [0] * (self.grid_width_cells * self.grid_height_cells)
+
+#         for row in range(self.grid_height_cells):
+#             y_m = self.grid_origin_y_m + (row + 0.5) * self.grid_resolution_m
+#             for col in range(self.grid_width_cells):
+#                 x_m = self.grid_origin_x_m + (col + 0.5) * self.grid_resolution_m
+#                 costs = [self.zone_cost(x_m, y_m, zone) for zone in zones]
+#                 if not costs:
+#                     continue
+#                 if self.combine_mode == 'sum_clamped':
+#                     cost = min(self.maximum_cost, sum(costs))
+#                 else:
+#                     cost = max(costs)
+#                 if cost >= self.minimum_published_cost:
+#                     grid.data[row * self.grid_width_cells + col] = cost
+#         return grid
+
+#     def make_markers(self, frame_id: str, stamp_ns: int,
+#                      zones: List[ConstraintZone]) -> MarkerArray:
+#         """Draw red iso-cost LINE_STRIPs for individuals and talking pairs.
+
+#         For level alpha: exp(-q/2)=alpha -> q=-2*ln(alpha), hence each
+#         semi-axis is sigma*sqrt(-2*ln(alpha)), in metres in frame_id.
+#         TEXT_VIEW_FACING labels state the percentage of this zone's peak;
+#         the main label separates sigma from outer contour dimensions.
+#         DELETEALL and finite lifetime clear old pairs/levels when input changes.
+#         """
+#         markers = MarkerArray()
+#         clear = Marker()
+#         clear.action = Marker.DELETEALL
+#         markers.markers.append(clear)
+#         lifetime_s = float(self.get_parameter('marker_lifetime_s').value)
+
+#         for zone_id, zone in enumerate(zones):
+#             # Zero weight has no field to contour; DELETEALL removes old lines.
+#             if zone.social_weight == 0.0:
+#                 continue
+#             for level_id, level in enumerate(self.contour_levels):
+#                 contour_scale = math.sqrt(-2.0 * math.log(level))
+#                 marker = Marker()
+#                 marker.header.frame_id = frame_id
+#                 marker.header.stamp.sec = stamp_ns // 1_000_000_000
+#                 marker.header.stamp.nanosec = stamp_ns % 1_000_000_000
+#                 marker.ns = ('social_constraint_talking_group' if zone.member_ids
+#                              else 'social_constraint_current')
+#                 # One namespace can contain several people and several levels;
+#                 # a unique ID prevents RViz replacing one line with another.
+#                 marker.id = zone_id * len(self.contour_levels) + level_id
+#                 marker.type = Marker.LINE_STRIP
+#                 marker.action = Marker.ADD
+#                 marker.pose.orientation.w = 1.0
+#                 marker.scale.x = 0.03 if level_id == len(self.contour_levels)-1 else 0.015
+#                 marker.color.a = 0.85
+#                 marker.color.r = 1.0
+#                 marker.color.g = 0.05
+#                 marker.color.b = 0.0
+#                 marker.lifetime.sec = int(lifetime_s)
+#                 marker.lifetime.nanosec = int((lifetime_s % 1.0) * 1_000_000_000)
+
+#                 # Local front/side axes -> tracking coordinates; 72 segments
+#                 # keep large pair contours smooth. No time prediction is used.
+#                 for index in range(73):
+#                     angle = 2.0 * math.pi * index / 72.0
+#                     forward_axis = (zone.front_semi_axis_m if math.cos(angle) >= 0.0
+#                                     else zone.rear_semi_axis_m)
+#                     lateral_axis = (zone.left_semi_axis_m if math.sin(angle) >= 0.0
+#                                     else zone.right_semi_axis_m)
+#                     forward = contour_scale * forward_axis * math.cos(angle)
+#                     lateral = contour_scale * lateral_axis * math.sin(angle)
+#                     point = Point()
+#                     point.x = zone.x_m + math.cos(zone.yaw_rad)*forward - math.sin(zone.yaw_rad)*lateral
+#                     point.y = zone.y_m + math.sin(zone.yaw_rad)*forward + math.cos(zone.yaw_rad)*lateral
+#                     point.z = 0.05
+#                     marker.points.append(point)
+#                 markers.markers.append(marker)
+
+#                 # Spread labels around the contours rather than stacking six
+#                 # values at the same heading; these are peak fractions, not m.
+#                 level_label = Marker()
+#                 level_label.header = marker.header
+#                 level_label.ns = 'social_constraint_contour_labels'
+#                 level_label.id = marker.id
+#                 level_label.type = Marker.TEXT_VIEW_FACING
+#                 level_label.action = Marker.ADD
+#                 level_label.pose.position = marker.points[(4 + 9*level_id) % 72]
+#                 level_label.pose.orientation.w = 1.0
+#                 level_label.scale.z = 0.10
+#                 level_label.color.r = level_label.color.g = level_label.color.b = 1.0
+#                 level_label.color.a = 1.0
+#                 level_label.lifetime = marker.lifetime
+#                 level_label.text = f'{100*level:g}%'
+#                 markers.markers.append(level_label)
+
+#             # Group labels show both member IDs and measured separation. Rear
+#             # and side sigma differ in talking geometry, so list them separately.
+#             label = Marker()
+#             label.header = marker.header
+#             label.ns = 'social_constraint_sigma'
+#             label.id = zone_id
+#             label.type = Marker.TEXT_VIEW_FACING
+#             label.action = Marker.ADD
+#             label.pose.position.x = zone.x_m
+#             label.pose.position.y = zone.y_m
+#             label.pose.position.z = 1.8
+#             label.pose.orientation.w = 1.0
+#             label.scale.z = 0.18
+#             label.color.r = label.color.g = label.color.b = label.color.a = 1.0
+#             label.lifetime = marker.lifetime
+#             identity = (f'PAIR {zone.member_ids[0]} + {zone.member_ids[1]} '
+#                         f'| sep={zone.separation_m:.2f} m' if zone.member_ids
+#                         else f'ID {zone.track_id}')
+#             length = self.outer_contour_scale * (zone.front_semi_axis_m + zone.rear_semi_axis_m)
+#             width = self.outer_contour_scale * (zone.left_semi_axis_m + zone.right_semi_axis_m)
+#             label.text = (
+#                 f'{identity} | outer {100*self.contour_levels[-1]:g}% peak\n'
+#                 f'{zone.social_state} w={zone.social_weight:g} '
+#                 f'peak={self.maximum_cost*zone.social_weight:g}\n'
+#                 f'sigma: h={zone.front_semi_axis_m:.2f} m '
+#                 f'r={zone.rear_semi_axis_m:.2f} m s={zone.left_semi_axis_m:.2f} m\n'
+#                 f'outer: length={length:.2f} m width={width:.2f} m')
+#             markers.markers.append(label)
+#         return markers
+
+
+# def main(args: Optional[List[str]] = None) -> None:
+#     rclpy.init(args=args)
+#     node = SocialConstraintGrounding()
+#     try:
+#         rclpy.spin(node)
+#     except KeyboardInterrupt:
+#         pass
+#     finally:
+#         node.destroy_node()
+#         rclpy.shutdown()
+
+
+# if __name__ == '__main__':
+#     main()

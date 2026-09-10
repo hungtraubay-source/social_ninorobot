@@ -55,6 +55,11 @@ public:
     crossing_subscription_ = node_->create_subscription<std_msgs::msg::Empty>(
       "/animated_people/crossing", rclcpp::QoS(10),
       [this](std_msgs::msg::Empty::ConstSharedPtr) { SpawnCrossingPerson(); });
+    // A stationary single-person scenario is useful for checking depth and
+    // social-space stability without walking velocity or route resets.
+    standing_subscription_ = node_->create_subscription<std_msgs::msg::Empty>(
+      "/animated_people/standing", rclcpp::QoS(10),
+      [this](std_msgs::msg::Empty::ConstSharedPtr) { SpawnStandingPerson(); });
     hide_subscription_ = node_->create_subscription<std_msgs::msg::Empty>(
       "/animated_people/hide", rclcpp::QoS(10),
       [this](std_msgs::msg::Empty::ConstSharedPtr) { RemovePeople(); });
@@ -99,6 +104,10 @@ private:
     double root_roll;
     double animation_duration;
     double phase_offset;
+    // ``true`` keeps one skeletal frame for the standing test.  The actor
+    // remains visually human-shaped, but its arms and torso cannot perturb
+    // RGB-D bounding-box/depth localization from one camera frame to another.
+    bool freeze_animation{false};
     double start_time{0.0};
     gazebo::physics::ActorPtr actor;
   };
@@ -139,11 +148,12 @@ private:
     const std::string & name,
     double x, double y, double yaw,
     double root_roll, double root_height,
-    double animation_duration, double phase_offset)
+    double animation_duration, double phase_offset,
+    bool freeze_animation = false)
   {
     talking_actors_.push_back({
       name, x, y, 0.20 + root_height, yaw, root_roll,
-      animation_duration, phase_offset});
+      animation_duration, phase_offset, freeze_animation});
   }
 
   void SpawnWalkingActor(
@@ -213,9 +223,13 @@ private:
         gzmsg << "Talking actor [" << talking.name << "] started\n";
       }
 
+      // Reapply the same script time for a static actor.  Gazebo's actor
+      // skeleton otherwise advances the ``talk`` clip even though its world
+      // pose is fixed, moving hands and corrupting the RGB-D torso depth.
       const double elapsed = std::max(0.0, now - talking.start_time);
-      const double animation_time = std::fmod(
-        elapsed + talking.phase_offset, talking.animation_duration);
+      const double animation_time = talking.freeze_animation ?
+        talking.phase_offset : std::fmod(
+          elapsed + talking.phase_offset, talking.animation_duration);
       talking.actor->SetScriptTime(animation_time);
     }
 
@@ -513,18 +527,49 @@ private:
     walking_actors_.clear();
     gathering_actors_.clear();
 
-    // The actor walks from A (-y) to B (+y).  The walking-route timer wraps
-    // at the final waypoint, so it is teleported to A at 12 s and immediately
-    // starts another A -> B pass; it never walks back from B to A.
+    // The actor walks from A (-y) to B (+y) at world x=+1.  With the default
+    // robot spawn at world x=-3, this is approximately map x=+4: open floor
+    // beyond the narrow doorway instead of its centre.  This keeps the person
+    // visible to the camera while allowing Nav2 a real lateral detour to test.
+    // The walking-route timer wraps at the final waypoint, so it is teleported
+    // to A at 12 s and immediately starts another A -> B pass; it never walks
+    // back from B to A.
     SpawnWalkingActor(
       "walker_1",
       {
-        {0.0, 0.0, -2.0, 3.14159265359},
-        {12.0, 0.0, 2.0, 3.14159265359},
+        {0.0, 1.0, -2.0, 3.14159265359},
+        {12.0, 1.0, 2.0, 3.14159265359},
       });
     scenario_state_ = "crossing";
     spawned_ = true;
     gzmsg << "Spawned crossing scenario: walker_1 crosses the camera every 12 s\n";
+  }
+
+  void SpawnStandingPerson()
+  {
+    std::lock_guard<std::mutex> lock(actor_mutex_);
+    if (spawned_) {
+      return;
+    }
+    talking_actors_.clear();
+    walking_actors_.clear();
+    gathering_actors_.clear();
+
+    // Coordinates are Gazebo world metres, matching the existing talking and
+    // crossing scenarios. ``SpawnTalkingActor`` applies m_sweater's skeletal
+    // root offset so its feet rest on the cafe floor instead of using z=0 for
+    // the actor root (which would bury the animated mesh below the surface).
+    // yaw=pi follows this actor model's facing convention and points it toward
+    // the bookshelf at world (0, 0), while
+    // it remains at (0, -1.4) on the XY plane for the terminal session.
+    // Freeze the talk clip at time zero: the model has no native idle clip,
+    // and a frozen skeleton prevents arm gestures from destabilising depth.
+    SpawnTalkingActor(
+      "m_sweater", 0.0, -1.4, 3.14, 1.112927, 0.878344, 3.75, 0.0, true);
+
+    scenario_state_ = "standing";
+    spawned_ = true;
+    gzmsg << "Spawned standing scenario: m_sweater at world (0, -1.4, floor)\n";
   }
 
   void RemovePeople()
@@ -571,6 +616,7 @@ private:
   rclcpp::Subscription<std_msgs::msg::Empty>::SharedPtr release_subscription_;
   rclcpp::Subscription<std_msgs::msg::Empty>::SharedPtr gather_subscription_;
   rclcpp::Subscription<std_msgs::msg::Empty>::SharedPtr crossing_subscription_;
+  rclcpp::Subscription<std_msgs::msg::Empty>::SharedPtr standing_subscription_;
   rclcpp::Subscription<std_msgs::msg::Empty>::SharedPtr hide_subscription_;
   std::vector<TalkingActor> talking_actors_;
   std::vector<WalkingActor> walking_actors_;

@@ -255,7 +255,11 @@ global_costmap:
         pointcloud:  # no frame set, uses frame from message
           topic: /camera/depth/color/points
           max_obstacle_height: 2.0
-          min_obstacle_height: 0.01
+          # The Gazebo cafe floor is at z≈0.19 m.  Depth sees that floor as a
+          # curved fan in front of the robot; accepting it as an obstacle
+          # blocks the global route.  Ignore points below 0.25 m, while a
+          # person's legs/torso and furniture still mark the VoxelLayer.
+          min_obstacle_height: 0.25
           obstacle_max_range: 2.5
           obstacle_min_range: 0.0
           raytrace_max_range: 3.0
@@ -273,19 +277,23 @@ global_costmap:
         plugin: "social_navigation::SocialLayer"
         enabled: true
         people_topic: /people
-        # Gaussian social field; height is along the person's motion, width lateral.
+        # Soft social preference for global routing. VoxelLayer keeps the body
+        # itself blocked, so this field must not turn all personal space into a
+        # lethal wall when the robot has room to pass in a narrow corridor.
+        # With amplitude=200 and cutoff=10, covariance_when_still=0.07 gives
+        # a stationary Gaussian radius of about 0.65 m (was 0.85 m).
         cutoff: 10.0
-        amplitude: 255.0
-        covariance_front_height: 0.4
-        covariance_front_width: 0.25
-        covariance_rear_height: 0.25
-        covariance_rear_width: 0.25
-        covariance_right_height: 0.3
-        covariance_right_width: 0.2
-        covariance_when_still: 0.25
+        amplitude: 200.0
+        covariance_front_height: 0.14
+        covariance_front_width: 0.09
+        covariance_rear_height: 0.09
+        covariance_rear_width: 0.09
+        covariance_right_height: 0.10
+        covariance_right_width: 0.08
+        covariance_when_still: 0.07
         use_passing: true
         use_vel_factor: true
-        speed_factor_multiplier: 5.0
+        speed_factor_multiplier: 2.0
         velocity_still_threshold: 0.1
         # Publish the unmerged Gaussian field for RViz debugging.
         publish_occgrid: true
@@ -364,7 +372,9 @@ local_costmap:
         pointcloud:  # no frame set, uses frame from message
           topic: /camera/depth/color/points
           max_obstacle_height: 2.0
-          min_obstacle_height: 0.01
+          # Match the global layer: remove the depth-camera floor fan from
+          # DWB's rolling local costmap without disabling real 3-D obstacles.
+          min_obstacle_height: 0.25
           obstacle_max_range: 2.5
           obstacle_min_range: 0.0
           raytrace_max_range: 3.0
@@ -376,18 +386,22 @@ local_costmap:
         plugin: "social_navigation::SocialLayer"
         enabled: true
         people_topic: /people
+        # Local DWB needs a passable gradient to steer around a person. The
+        # RGB-D VoxelLayer still forbids collision with the body itself. Keep
+        # these variances identical to the global layer so DWB sees the same
+        # ~0.65 m stationary social radius when it evaluates trajectories.
         cutoff: 10.0
-        amplitude: 255.0
-        covariance_front_height: 0.4
-        covariance_front_width: 0.25
-        covariance_rear_height: 0.25
-        covariance_rear_width: 0.25
-        covariance_right_height: 0.3
-        covariance_right_width: 0.2
-        covariance_when_still: 0.25
+        amplitude: 200.0
+        covariance_front_height: 0.14
+        covariance_front_width: 0.09
+        covariance_rear_height: 0.09
+        covariance_rear_width: 0.09
+        covariance_right_height: 0.10
+        covariance_right_width: 0.08
+        covariance_when_still: 0.07
         use_passing: true
         use_vel_factor: true
-        speed_factor_multiplier: 5.0
+        speed_factor_multiplier: 2.0
         velocity_still_threshold: 0.1
         publish_occgrid: true
         data_timeout: 1.0
