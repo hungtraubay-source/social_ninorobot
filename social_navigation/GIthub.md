@@ -1,5 +1,41 @@
 ===============================================================================
 ===============================================================================
+# sửa file nào thì up lên 
+git checkout -b (tên của branch)
+
+git add .
+git commit -m "Update code"
+git push origin "tên"
+
+
+
+# lần thứ 2 mà sửa code thì dùng này + thêm cả file code mới nhé
+git add .
+git commit --amend   :wq
+git push origin (tên) -f
+
+
+# kéo code mới nhất về ddi kkk
+git pull origin main
+git branch -D "tên branch"
+git branch
+
+# check 5 cái gần nhất
+git log --online -n5
+
+# dành cho người dùng chung
+folk về của mình ---> clone về máy --->
+
+git remote -v : kiểm tra xem origin là của ai 
+
+git remote add "ten công ty" "link SSH"
+
+# lấy code về
+git pull trungquan17 main
+
+
+
+
 
 
 # Này là tải lại folder lên github
@@ -21,6 +57,7 @@ git pull origin main
 git checkout main
 git pull origin main
 git checkout -b feature/fix-txt
+
 # code
 git add /home/hung/ninorobot2/social_navigation/GIthub.md     
 git commit -m "Mo ta thay doi"
@@ -31,6 +68,21 @@ git add linorobot2_gazebo/worlds/lirs_test.world
 git add linorobot2_navigation/config/nav_sim.yaml
 git commit -m "Update Gazebo scenario and navigation config"
 git push -u origin feature/fix-gazebo-config
+
+
+# này chạy để  ignore file 
+git rm --cached duong_dan/toi/file_can_bo
+git add .gitignore
+git commit -m "Stop tracking local file"
+git push -u origin fix/ignore-local-model
+
+
+
+
+
+
+
+
 
 
 
