@@ -1,0 +1,2409 @@
+===============================================================================
+ social_rl - HUẤN LUYỆN KHỐI E (Constraint-conditioned RL)
+===============================================================================
+
+
+source install/setup.bash
+ros2 topic pub --once /animated_people/scenario std_msgs/msg/String "{data: talking}"
+ros2 topic pub --once /animated_people/scenario std_msgs/msg/String "{data: passing}"       # 50/50 crossing|approaching, nhãn "passing"
+ros2 topic pub --once /animated_people/scenario std_msgs/msg/String "{data: crossing}"      # hình học cắt ngang (nhãn vẫn "passing")
+ros2 topic pub --once /animated_people/scenario std_msgs/msg/String "{data: approaching}"   # hình học đối đầu   (nhãn vẫn "passing")
+ros2 topic pub --once /animated_people/scenario std_msgs/msg/String "{data: backs_turned}"
+ros2 topic pub --once /animated_people/scenario std_msgs/msg/String "{data: none}"        # dọn sạch
+
+while true; do
+  ros2 topic pub -t 3 /animated_people/scenario std_msgs/msg/String "{data: passing}" >/dev/null
+  sleep 7
+done
+
+Nhiệm vụ: robot đi tới đích mà không vi phạm trường ràng buộc xã hội K_soc do
+khối D dựng ra. Không chỉ là "né người": chen vào giữa hai người ĐANG NÓI
+CHUYỆN phải đắt hơn hẳn đi ngang sau lưng hai người ĐANG QUAY LƯNG lại, dù
+khoảng cách hình học y hệt nhau.
+
+-------------------------------------------------------------------------------
+ CHỈ CẦN HAI TERMINAL
+-------------------------------------------------------------------------------
+
+Bản cũ cần bốn terminal (Gazebo, perception YOLO+VLM, thả người, trainer). Bây
+giờ còn hai, vì:
+
+  * người đến từ GROUND TRUTH của Gazebo, không qua YOLO/camera nữa
+    -> không cần terminal perception, không nạp model, không tốn VRAM
+  * trainer TỰ gửi kịch bản mỗi đầu tập qua /animated_people/scenario
+    -> không cần terminal thả người
+
+    Terminal 1:
+        cd ~/social_ninorobot && source install/setup.bash
+        ros2 launch linorobot2_gazebo gazebo.launch.py gui:=false
+
+        ĐỢI dòng: "Successfully spawned entity [linorobot2]"
+        và:       "Animated people factory plugin loaded"
+
+        11-09-2026: KHÔNG cần social_safety:=false nữa - plugin diff_drive
+        giờ nghe thẳng /cmd_vel (bỏ remap cmd_vel:=cmd_vel_safe trong
+        diff_drive.urdf.xacro), social_velocity_filter không còn ảnh hưởng
+        gì tới việc robot có chạy hay không nữa, dù bật hay tắt cờ này.
+
+    Terminal 2:
+        cd ~/social_ninorobot && source install/setup.bash
+        ros2 launch social_rl rl_train.launch.py
+
+    Bất cứ lúc nào:
+        tensorboard --logdir ~/social_rl_runs
+
+Kiểm tra nhanh trước khi train (terminal 1 đã chạy):
+
+    ros2 topic hz /social_gt/people      # phải có, ~17 Hz ở RTF 1.0
+    ros2 topic hz /model_states          # phải có, ~93 Hz
+    ros2 topic hz /scan                  # phải có, ~8.5 Hz ở RTF 1.0
+
+Thiếu /social_gt/people = plugin animated_people_release chưa nạp. Kiểm tra
+GAZEBO_PLUGIN_PATH và xem đã `colcon build --packages-select linorobot2_gazebo`
+chưa.
+
+-------------------------------------------------------------------------------
+ CÀI ĐẶT VÀ BUILD
+-------------------------------------------------------------------------------
+
+    python3 -m pip install --user -r social_rl/requirements.txt
+
+KHÔNG cài lại torch. Máy đang có 2.13.0+cu130 khớp driver; để pip tự giải
+requirements sẽ thay nó bằng bản CPU.
+
+    cd ~/social_ninorobot
+    source /opt/ros/humble/setup.bash
+    colcon build --symlink-install
+    source install/setup.bash
+
+LƯU Ý: `social_perception/msg/Person.msg` có thêm trường `scene_type`. Sửa file
+.msg thì phải build lại MỌI package dùng nó - social_perception,
+social_navigation, linorobot2_gazebo, social_rl. Cứ build cả workspace cho chắc.
+
+-------------------------------------------------------------------------------
+ BẪY: SỬA rl_train.yaml CHƯA CHẮC ĂN NGAY  (đo 28-08-2026)
+-------------------------------------------------------------------------------
+
+Đã mất 13 tập train để phát hiện: thêm `none` vào env.scenarios rồi chạy, mà
+trainer vẫn bốc đúng ba tên cũ. Nguyên nhân:
+
+    install/social_rl/share/social_rl/config/rl_train.yaml
+        -rw-rw-r--   FILE THƯỜNG, không phải symlink, đóng băng từ lần build cũ
+
+`--symlink-install` chỉ tạo symlink cho những gì nó cài TRONG lần build đó. Hễ
+có MỘT lần `colcon build` chạy KHÔNG kèm `--symlink-install` thì file cài trở
+lại thành bản chép, và từ đó mọi lần sửa YAML trong cây nguồn đều bị bỏ qua
+TRONG IM LẶNG - không lỗi, không cảnh báo, chỉ là train sai cấu hình.
+
+KIỂM TRA TRƯỚC KHI TIN. Hai lệnh:
+
+    ls -la install/social_rl/share/social_rl/config/rl_train.yaml
+    # phải thấy lrwxrwxrwx -> .../build/social_rl/config/rl_train.yaml
+    # mà file build đó lại là symlink -> cây nguồn. Chuỗi đúng:
+    #     install -> build -> nguồn
+
+    grep -A6 "  scenarios:" <run_dir>/env_config.yaml
+    # train.py chép nguyên env/observation/reward vào đây; ĐÂY mới là thứ
+    # trainer thật sự nạp. Không khớp cây nguồn thì bản cài đang cũ.
+
+Sửa: `colcon build --symlink-install --packages-select social_rl`.
+
+-------------------------------------------------------------------------------
+ ĐẦU RA KHỐI B  (Person.msg)  -  cập nhật 28-08-2026
+-------------------------------------------------------------------------------
+
+Khối B giờ xuất đủ bốn thứ, GIỐNG NHAU ở cả sim lẫn robot thật:
+
+    id                  track id, ổn định giữa các frame
+    pose, velocity      vị trí + vận tốc, frame của header
+    prediction_times    [0.0, 0.5, 1.0, 1.5, 2.0] - 5 mẫu, mẫu đầu là HIỆN TẠI
+    predicted_poses     ngoại suy VẬN TỐC HẰNG, orientation mang facing dự báo
+    radial_velocity     m/s dọc trục robot->người. ÂM = đang tiến lại gần
+    motion_type         static | head_on | receding | left_to_right |
+                        right_to_left   (hình học thuần tuý, KHÔNG cần khối C)
+
+-------------------------------------------------------------------------------
+ ĐẦU RA KHỐI C  (Person.msg)  -  cập nhật 28-08-2026
+-------------------------------------------------------------------------------
+
+    scene_type          ngữ cảnh xã hội: talking | backs_turned | passing |
+                        walking | "" (không biết)
+                        (10-09-2026: crossing + approaching gộp thành passing)
+    scene_confidence    [0,1]. 1.0 = ground truth Gazebo (KHÔNG phải ước lượng
+                        - kịch bản do chính plugin chọn). 0.0 = không có phán
+                        đoán nào: khối C tắt, hoặc nó trả lời "unknown"
+    scene_stamp         LÚC khối C ra phán đoán, KHÁC header.stamp (lúc NHÌN
+                        THẤY người). Phán đoán VLM làm mới vài giây một lần
+                        còn camera chạy theo frame rate, nên đọc mỗi header sẽ
+                        tưởng phán đoán ba phút trước vừa mới tới. Bằng 0 khi
+                        scene_confidence = 0.0
+
+Để PER-PERSON chứ không per-message, cùng lý do Group mang cặp stamp riêng:
+tình huống của một người có thể cũ đi mà không nói gì về những người khác
+trong cùng frame.
+
+TRÊN SIM: plugin điền scene_confidence = 1.0 và scene_stamp = header.stamp mỗi
+lần publish. Phán đoán được làm lại mỗi chu kỳ, không bao giờ là câu trả lời
+cũ nằm trong cache như của VLM.
+
+TRÊN ROBOT THẬT: social_vlm_perception.py đọc interaction_cache - đúng cái cache
+quyết định mà publisher vùng xã hội vẫn đang dùng - chứ không hỏi model lại.
+CHỈ phán đoán 'talking' mới sinh ra scene_type. 'not_talking' là câu trả lời
+thật nhưng khối D KHÔNG có vùng nào cho nó: hình trung tính của D đã chính là
+"không biết gì về mặt xã hội" rồi, thêm một giá trị bảng scene_scales không
+có thì vẫn rơi về đúng hình đó mà lại trông như có thông tin. Người đi kiểu gì
+là phần việc của khối B và về theo motion_type bất kể C nói gì.
+
+Đã đo 28-08-2026 trên sim, 139 message liên tiếp: scene_confidence = 1.000 cho
+mọi người ở cả 5 kịch bản (talking / crossing / approaching / backs_turned /
+none), scene_stamp - header.stamp = +0.000000000 s, và scene_stamp tiến 6.942 s
+qua 139 message (không đứng yên).
+
+DỰ BÁO CỐ Ý DÙNG VẬN TỐC HẰNG, KỂ CẢ TRONG SIM. Plugin biết waypoint thật và
+publish được tương lai chính xác, nhưng không làm: robot thật không có oracle
+đó, và một policy quen ăn tương lai chính xác là policy hỏng ngày rời mô phỏng.
+Ground truth ở đây mua sự chính xác của pose và velocity ĐỂ NGOẠI SUY TỪ ĐÓ,
+không mua kiến thức về tương lai.
+
+radial_velocity và motion_type là HAI TRƯỜNG DUY NHẤT đo tương đối với robot,
+nên message hết trung lập frame. Sim lấy pose robot bằng world->ModelByName;
+robot thật tra TF target_frame -> robot_frame. Không thấy robot thì
+radial_velocity = 0.0 và motion_type = "" (rỗng), không đoán bừa.
+
+CỬA SỔ DỰ BÁO PHẢI KHỚP BA CHỖ, nếu không policy ăn quan sát nó chưa từng thấy:
+
+    animated_people_release.cpp   prediction_horizon 2.0 / prediction_dt 0.5
+                                  (mặc định của plugin; lirs_test.world hiện
+                                  KHÔNG ghi đè, khai <prediction_horizon> trong
+                                  thẻ <plugin> nếu muốn đổi)
+    social_vlm_perception*.yaml   prediction_horizon / prediction_dt
+    rl_train.yaml                 observation.constraint_field.prediction_times
+
+Đã đo 28-08-2026 trên sim (kịch bản crossing, robot ở (-3,-2) yaw 0):
+walker_1 tại (0.90,-2.67) v=(+0.290,-0.530) -> radial +0.3759, left_to_right;
+kịch bản approaching -> radial -0.6605, head_on. Cả hai khớp phép tính tay
+với sai số 0.0000, quỹ đạo 5 mẫu sai số ngoại suy 0.00e+00 m.
+
+-------------------------------------------------------------------------------
+ ĐẦU RA KHỐI D  (K_soc)  -  cập nhật 28-08-2026
+-------------------------------------------------------------------------------
+
+K_soc rời khối D dưới dạng DANH SÁCH VÙNG, không phải ảnh. Ảnh 5 kênh cho CNN
+do render_zones() dựng ra, và đó là BƯỚC ĐẦU CỦA KHỐI E chứ không phải bước
+cuối của khối D.
+
+    compile_zones(people, config)  ->  ConstraintField
+    render_zones(field, x, y, times)  ->  (5, 32, 32)      <- khối E
+    intrusion_at_zones(field)  ->  float                   <- hàm thưởng
+
+    {
+      "timestamp": 12.34, "frame": "base_link",
+      "horizon_steps": 4, "dt": 0.5,          # 4 KHOẢNG => 5 MẪU (kể cả t=0)
+      "zones": [{
+        "zone_id": "z_g3_9", "track_ids": ["3","9"],
+        "scene_type": "talking", "hardness": "hard", "confidence": 0.87,
+        "valid_from": 0.0, "valid_to": 2.0,
+        "trajectory_of_zone": [
+          {"t": 0.0, "shape": "ellipse", "center": [1.4, -0.85],
+           "size": [1.425, 1.0, 1.425], "core": 1.1, "orientation": 1.570796},
+          ...]}]
+    }
+
+size LÀ BA SỐ [trước, ngang, sau], không phải hai. Vùng lệch trước/sau là toàn
+bộ lý do khối D tồn tại: backs_turned cắt bán kính sau còn 0.45 lần đúng để đi
+vòng ra sau là chuyện trả được. Ellipse hai bán trục không chứa nổi việc đó.
+
+core là bán kính lõi, giá trị 1.0 ở trong, ramp tuyến tính ra 0.0 ở biên.
+Hướng nào biên gần hơn core (trục ngắn của vùng nhóm) thì đặc luôn tới biên.
+
+hardness là vùng đó NGHĨA LÀ GÌ, không phải VẼ THẾ NÀO - cả hai vẽ y hệt nhau.
+`hard` = o-space cuộc trò chuyện, chỗ duy nhất robot không được đi qua, và là
+thứ khối F nên lấy làm ràng buộc CBF. `soft` = vùng cá nhân, đắt nhưng đi được.
+
+VÙNG NHÓM CHỒNG LÊN VÙNG CÁ NHÂN, KHÔNG THAY THẾ  (sửa 30-08-2026). Hai người
+đang nói chuyện sinh ra MỘT ellipse bao cả hai và khoảng giữa, VÀ mỗi người vẫn
+giữ vùng cá nhân của mình; render_zones lấy max nên hai thứ hợp lại. Không phải
+đĩa o-space trần: đĩa chỉ với tới sep/2 + 0.35 = 1.10 m từ trung điểm, mà robot
+đứng sau lưng một người 0.5 m thì cách trung điểm 1.25 m -> lọt ra ngoài, đi sát
+lưng người thành MIỄN PHÍ. Ellipse bao với tới sep/2 + rear = 1.425 m.
+
+Đo 28-08-2026, cặp cách nhau 1.5 m, đọc bằng chính intrusion_at_zones():
+
+    vị trí robot            cũ      mới
+    sau lưng A, 0.5 m       0.778   0.538    thấp hơn, nhưng KHÔNG thủng
+    cạnh sườn A, 0.5 m      1.000   1.000
+    chính giữa hai người    1.000   1.000    <- chỗ phải giữ bằng mọi giá
+
+VÌ SAO BỎ LUẬT "THAY THẾ"  (đo 30-08-2026). Ellipse nhóm với tới sep/2 + rear
+DỌC theo trục nối hai người, nhưng chỉ r_side * side_scale = 1.00 m NGANG trục
+đó, bất kể hai người đứng cách nhau bao xa. Khi vùng nhóm xoá vùng cá nhân thì
+sườn ngoài của mỗi người thành lỗ trống. Trên đúng hình học kịch bản sinh ra
+(pair_separation mặc định 2.8 m, thực tế NextUniform(1.6, 2.8)):
+
+    robot lướt cách sườn một người 0.89 m, cùng một hình học:
+        khối C nói `talking` (ĐÚNG)        0.000   <- ít bảo vệ NHẤT
+        khối C tắt, scene_type = ''         0.200
+        khối C đọc nhầm thành `walking`     0.200
+        khối C đọc nhầm thành `crossing`    0.511
+
+    Nhận diện ĐÚNG lại cho ít bảo vệ nhất, và khối C càng tốt thì lỗ đó càng
+    hay gặp. Đây là lý do sửa, không phải để phạt nặng hơn.
+
+Sau khi hợp hai vùng (cùng phép đo, cặp 1.5 m và 2.8 m):
+
+    vị trí robot            trước   sau
+    chính giữa hai người    1.000   1.000    o-space giữ nguyên
+    cạnh sườn A, 0.50 m     1.000   1.000
+    cạnh sườn A, 0.89 m     0.000   0.200    <- ĐÚNG MỘT Ô NÀY ĐỔI
+    sau lưng A, 0.89 m      0.000   0.000    đi vòng sau lưng vẫn trả được
+
+`backs_turned` / `crossing` / `approaching` / `''` khớp BIT-EXACT với bản trước
+vì chỉ `talking` mới sinh vùng nhóm. Tốc độ: compile + intrusion 0.214 ms mỗi
+lần với 2 người, dưới 0.2% ngân sách ở 5 Hz.
+
+RESUME ĐƯỢC, KHÔNG PHẢI TRAIN LẠI TỪ ĐẦU. Thay đổi nằm trong compile_zones và
+KHÔNG đụng khoá nào trong `observation`, nên check_resume_layout cho qua. Nếu
+sau này ai đó biến việc này thành một cờ trong config thì khoá mới sẽ làm hàm
+đó chặn mọi checkpoint cũ - đừng làm vậy.
+
+CẢNH `talking` ĐỔI TRƯỜNG => PHẢI TRAIN LẠI. Bốn cảnh còn lại khớp BIT-EXACT
+với bản cũ (sai khác lớn nhất 0.000000000 trên crossing / approaching /
+walking / backs_turned / none) - đó là bằng chứng phần còn lại chỉ đổi biểu
+diễn chứ không đổi hành vi.
+
+BẪY ĐÃ SỬA: _elliptical_region trả NaN ở ĐÚNG tâm vùng. Ở tâm không có hướng
+nên cả hai cosin bằng 0, reach thành vô cùng, ramp thành inf/inf. Vô hại suốt
+thời gian mọi vùng còn lấy tâm là một NGƯỜI (robot không bao giờ đứng trong
+người). Hết vô hại khi vùng nhóm đặt tâm vào KHOẢNG GIỮA hai người - đúng cái ô
+mà cả hệ thống này sinh ra để định giá. NaN * social_penalty = phần thưởng NaN
+và cả run chết theo. Đã chặn mẫu số ở 1e-12, tâm ra đúng 1.0.
+
+TỐC ĐỘ (2 người, đo 28-08-2026): raster cũ 0.530 ms/step; compile+render mới
+0.267 ms + intrusion 0.076 ms = 0.343 ms, tức 0.17% ngân sách ở 5 Hz. NHANH HƠN
+bản cũ vì vùng nhóm thay hai vùng cá nhân và bỏ hẳn phép np.hypot toàn lưới của
+đĩa o-space.
+
+COMPILE MỘT LẦN MỖI STEP. ros_interface.observe() gọi compile_zones() rồi đưa
+CÙNG một object cho build_observation() và cho intrusion_at_zones(). Trước đây
+hai đường tự tính lại từ cùng một hàm; giờ là cùng một OBJECT, nên không còn
+cách nào cho "thứ policy nhìn thấy" khác "thứ policy bị phạt".
+
+-------------------------------------------------------------------------------
+ KHỐI F - LÁ CHẮN AN TOÀN CBF/QP  -  thêm 28-08-2026
+-------------------------------------------------------------------------------
+
+    ros2 launch social_navigation social_shield.launch.py sim:=true
+
+    policy -> /cmd_vel -> khối F -> /cmd_vel_safe -> plugin diff_drive
+
+KHÔNG chạy cùng lúc với social_safety.launch.py (social_velocity_filter): hai
+thứ cùng ghi /cmd_vel_safe, cái nào publish sau thì thắng và KHÔNG cái nào còn
+bảo đảm gì. Chọn một.
+
+Khác biệt: filter cũ SCALE lệnh xuống theo khoảng cách, nên nó chỉ biết đi chậm
+lại trên đúng đường đang đi. Khối F ràng buộc TỐC ĐỘ THAY ĐỔI của hàm rào nên
+nó LÁI được - đi vòng ở tốc độ cao là hợp lệ, bò thẳng vào vùng thì không.
+
+Ăn /social_rl/constraint_field (khối D, 4.6 Hz đo được, publish từ chính chỗ
+compile_zones() chạy), /people (khối B), /scan (khối H).
+
+ĐIỂM BẢO VỆ NẰM TRƯỚC TRỤC BÁNH (`lookahead`, mặc định 0.25 m). Bắt buộc > 0:
+điểm ngay trên trục bánh chỉ đi với vận tốc (v, 0) - w KHÔNG làm nó dịch chuyển
+tức thời - nên hàm rào viết trên đó không có số hạng w và QP chỉ biết PHANH chứ
+không biết lái.
+
+QP TỰ GIẢI, KHÔNG DÙNG THƯ VIỆN. Máy này không có osqp/qpsolvers/cvxpy/quadprog
+và mọi thứ phải chạy offline. Hai biến (v, w), tập khả thi là giao các nửa mặt
+phẳng, nên nghiệm nằm ở điểm không ràng buộc, hình chiếu lên từng ràng buộc,
+hoặc giao của từng cặp - liệt kê hết vài trăm ứng viên, chính xác và không có
+số vòng lặp nào phải chỉnh.
+
+Đo 28-08-2026, bơm ConstraintField vào node đang chạy (tắt lidar để tách):
+vùng nhóm hard core 1.1, size (1.425, 1.0, 1.425), lookahead 0.25, alpha 2.0.
+Tính tay: v <= 2*(d - 1.25), trừ thêm 0.5 nếu vùng lao tới 0.5 m/s.
+
+    tình huống                       v ra    tính tay
+    tâm cách 1.6 m, đứng yên         0.500   0.500     không can thiệp
+    tâm cách 1.5 m, đứng yên         0.500   0.500     không can thiệp
+    tâm cách 1.4 m, đứng yên         0.300   0.300     hãm
+    tâm cách 1.3 m, đứng yên         0.100   0.100     hãm
+    tâm cách 1.2 m, đứng yên         DỪNG    DỪNG      bất khả thi
+    lao tới 0.5 m/s, cách 1.8 m      0.500   0.500     không can thiệp
+    lao tới 0.5 m/s, cách 1.6 m      0.200   0.200     hãm
+    lệch trái 0.5 m, cách 1.35 m     0.331, w=-0.043   LÁI, không phanh sâu
+
+BẪY: /scan CHỨA TIA ĐẬP VÀO THÂN ROBOT. Đo trên lirs_test.world lúc Gazebo mới
+khởi động sạch: 170/360 tia về dưới 0.30 m, min 0.102 m, và mẫu ĐỐI XỨNG GƯƠNG
+qua trục robot ([-30,0) và [0,+30) giống hệt nhau; thế giới thì không đối
+xứng). Để nguyên thì mỗi tia đó là một hàm rào ĐÃ ÂM 0.2 m, QP bất khả thi từ
+message đầu tiên, và lá chắn phanh chết trong phòng trống. Tham số
+`scan_minimum_range: 0.35` cắt dải đó.
+
+ĐÃ TRUY XONG 28-08-2026 - luật hit_obstacle KHÔNG phải code chết.
+
+Số 0.100 m ghi ở trên là MỘT LẦN ĐO TRÊN TRẠNG THÁI BẤT THƯỜNG, không phải giá
+trị thường trực; kết luận "mọi tập phải chết ngay bước 1" rút ra từ nó là sai.
+Đo lại trên Gazebo mới khởi động, đứng yên:
+
+    149 scan liên tiếp: min = trung vị = max = 1.956 m
+    số scan <= 0.30: 0/149
+
+Trong lúc train (1781 scan, ~200 s):
+
+    trung vị 2.320 m, max 2.579 m
+    tụt xuống <= 0.6 m: 5 lần (0.28%)
+
+BỐN TRONG NĂM LẦN TỤT RƠI VÀO CỬA SỔ RESET, 0.8-1.1 s TRƯỚC dòng "episode
+start" - tức trong lúc teleport robot và chờ nó ổn định, TRƯỚC bước đầu tiên
+của tập. Lần còn lại xảy ra giữa tập, đúng MỘT scan (0.1 s), và vòng lặp env
+lấy mẫu ở 5 Hz nên trượt mất.
+
+CẬP NHẬT 29-08-2026: hit_obstacle ĐÃ THẤY KÍCH HOẠT trong các run sau đó
+("hit_obstacle after 170 steps", "after 208 steps"). Luật chạy đúng.
+
+KHÔNG PHẢI DO NGƯỜI. Các cú tụt là robot tự nhìn thấy thân mình: mặt phẳng
+lidar ở z = 0.19526 (base_link) chỉ cao hơn nóc hộp collision của base 39 mm,
+nên mỗi lần teleport lúc reset robot nảy lên là lidar quét đúng mép trước thân
+xe.
+
+ĐÃ CHẶN 29-08-2026 - MẶT NẠ FOOTPRINT, KHÔNG PHẢI SÀN DƯỚI THEO CỰ LY:
+
+    observation.scan_self_hit_radius: 0.15
+
+Tia nào có ĐIỂM CUỐI (đã đổi sang frame robot) nằm trong 0.15 m quanh
+base_link thì bị loại trước khi bất cứ ai đọc /scan. Không có gì thật nằm ở đó
+được, nên nó không thể giấu vật cản.
+
+VÌ SAO KHÔNG DÙNG SÀN DƯỚI 0.12 m NHƯ ĐỊNH BAN ĐẦU: ray-cast lại đúng hộp
+collision của base (0.20 x 0.20 quanh base_link) từ đúng gốc lidar cho thấy
+tia đập vào thân xe trải từ 0.093 m đến 0.136 m tuỳ góc - sàn 0.12 m để lọt
+gần một nửa. Mặt nạ footprint cắt trúng cả dải, vì mọi điểm cuối đó đều nằm
+trên biên hộp (0.10-0.1414 m).
+
+Sửa ở ros_interface.scan_returns(), MỘT hàm cho cả ba nơi đọc /scan: kênh
+occupancy, luật va chạm, và phép che khuất. Trước đó minimum_scan() đọc ranges
+thô còn lưới đọc điểm đã đổi frame, tức kênh 0 cũng đang vẽ thân robot vào
+giữa lưới mà không ai để ý.
+
+ĐO ĐƯỢC:
+    robot đứng yên, 180 scan/20 s: 0 tia bị loại, cũ = mới = 1.955 m
+        -> bộ lọc là no-op ở trạng thái bình thường, không mất gì
+    scan dựng lại lúc nảy (140/360 tia đập thân xe): cũ 0.093 m -> MỚI 1.956 m
+    tường thật ở 0.25 m: vẫn ra 0.25 m, luật hit_obstacle vẫn kích hoạt
+
+    TRÊN RUN THẬT, 3282 scan / 420 s, có nhiều lần reset:
+        CŨ:  min 0.107 m, trung vị 2.091, số lần <= 0.30: 6
+        MỚI: min 0.256 m, trung vị 2.091, số lần <= 0.30: 5
+        tia bị loại: TỔNG 2 trên 3282 scan (trung vị 0, max 2)
+
+    Đọc bảng này cho đúng: bộ lọc gỡ ĐÚNG MỘT lần tụt giả (0.107 m) và giữ
+    nguyên 5 lần còn lại - đó là va tường thật, run này có 3 tập kết thúc bằng
+    hit_obstacle. Nó bỏ 2 tia trên 3282 scan, không phải cái chổi quét sạch
+    mọi số nhỏ.
+
+-------------------------------------------------------------------------------
+ OBSERVATION - 6 KÊNH, THEO ĐÚNG SƠ ĐỒ KHỐI
+-------------------------------------------------------------------------------
+
+    grid   (6, 32, 32)  hộp 6.4 x 6.4 m quanh robot, mũi robot hướng lên
+        kênh 0     KHỐI H: occupancy tĩnh, ô nào có tia lidar chạm thì 1.0
+        kênh 1     KHỐI D: K_soc NGAY LÚC NÀY, t+0.0 s - đúng mốc hàm thưởng
+                   tính phạt
+        kênh 2     KHỐI D: K_soc dự báo tại t+0.5 s
+        kênh 3     KHỐI D: K_soc dự báo tại t+1.0 s
+        kênh 4     KHỐI D: K_soc dự báo tại t+1.5 s
+        kênh 5     KHỐI D: K_soc dự báo tại t+2.0 s
+    vector (5,)         KHỐI H
+        [0] khoảng cách tới đích / goal_max_distance (chặn ở 10 m)
+        [1] sin(góc lệch tới đích)
+        [2] cos(góc lệch tới đích)
+        [3] v đo được / max_linear_speed   (từ /odom, KHÔNG phải lệnh vừa gửi)
+        [4] w đo được / max_angular_speed
+
+Chân trời dự báo 2.0 s bước 0.5 s, CỘNG mốc hiện tại -> đúng 5 kênh. Đổi số
+phần tử observation.constraint_field.prediction_times là đổi kích thước mạng
+CNN, checkpoint cũ KHÔNG nạp lại được.
+
+VÌ SAO CÓ KÊNH t=0.0 (thêm 30-08-2026, checkpoint trước mốc này chết). Kênh
+này từng bị bỏ với lý do kênh t+0.5 s gần như phủ lên nó và occupancy đã ngụ ý
+người đứng đâu. Lý do đó chỉ đúng với người ĐỨNG. Đuôi vùng cá nhân với tới
+0.64 m sau lưng (r_rear 0.75 x scale 0.85 của `walking`) trong khi ở 1.0 m/s
+tâm vùng chạy 0.5 m mỗi mốc, nên đuôi vùng chạy nhanh hơn robot bám sau. Đo
+30-08-2026, robot đứng sau người đi 1.0 m/s 0.3 m:
+
+    hàm thưởng tính tại t=0        1.000
+    bốn kênh policy nhìn thấy      0.000  0.000  0.000  0.000
+
+Tức policy bị phạt mức tối đa cho tình huống nó không hề thấy trong quan sát.
+Quét d = -1.6 .. 1.6 m: `walking` 1.0 m/s thủng ở d = 0.0..0.6 m, `walking`
+1.4 m/s ở -0.2..0.6, `crossing` 1.2 m/s ở -0.1..0.5, `approaching` 1.0 m/s ở
+0.0..0.5; `talking` KHÔNG thủng vì người đứng im nên bốn kênh trùng t=0. Robot
+đi bám sau người trong hành lang rơi đúng vào hình học này. Thêm kênh t=0.0
+xong đo lại: chênh lệch lớn nhất 0.000 ở cả năm kịch bản.
+
+VÌ SAO OCCUPANCY TÁCH RIÊNG KHỎI K_soc: tường thì 2 giây nữa vẫn ở đó còn người
+thì không. Cho hai thứ chung một con số thì policy không có cách nào học được
+khác biệt đó. Chúng đi chung một tensor chỉ để một CNN nhỏ đọc được cả hai cùng
+lúc - đó là thứ cho phép nó học "người này sắp bị ép vào tường kia, bên đó
+không lách được".
+
+-------------------------------------------------------------------------------
+ KHỐI D - TRƯỜNG RÀNG BUỘC XÃ HỘI  (social_rl/social_rl/constraint_field.py)
+-------------------------------------------------------------------------------
+
+Hình học O/P/R lấy nguyên từ social_navigation/src/social_layer.cpp (chỗ đã
+tuning cho costmap Nav2) nhưng làm LIÊN TỤC: giá trị 1.0 trong lõi o_radius
+0.45 m, giảm tuyến tính về 0.0 trên biên ellipse ngoài (r_front 1.5 / r_side
+1.0 / r_rear 0.75 m). Ba mức chi phí rời rạc 254/250/100 hợp với planner, không
+hợp với policy - policy học từ dốc trượt xuống được, không học tốt từ ba cao
+nguyên phẳng.
+
+GROUNDING chính là bảng scene_scales trong rl_train.yaml. CÙNG một người, CÙNG
+vị trí, CÙNG vận tốc, nhưng scene_type khác thì vùng khác:
+
+    scene_type      [trước, ngang, sau]   lý do
+    talking         1.25  1.00  0.90      đang bận, vùng nghiêng về phía đối phương
+    backs_turned    1.00  0.90  0.45      quay lưng - đi vòng ra sau là ĐÚNG phép
+    passing         1.10  1.35  0.80      người đi ngang qua (10-09-2026 gộp
+                                          crossing+approaching, lấy hệ số crossing)
+    walking         1.15  1.00  0.85
+    ''              1.00  1.00  1.00      chưa có khối C thì rơi vào đây
+
+Cộng thêm O-SPACE CỦA NHÓM: hai người cùng scene_type `talking` đứng gần nhau
+hơn group_max_distance 3.0 m thì khoảng giữa họ bị TÔ ĐẶC giá trị 1.0. Đây là
+lý do tồn tại của cả kiến trúc - chỗ duy nhất robot tuyệt đối không đi qua.
+
+PHÉP THỬ PHÂN BIỆT - đo 28-08-2026, chạy lại được bất cứ lúc nào:
+hai người ở (2.0, +0.8) và (2.0, -0.8) trong frame robot, đọc giá trị ở chính
+giữa họ tại (2.0, 0.0):
+
+    scene_type talking       -> 1.00    phải đi vòng
+    scene_type backs_turned  -> 0.47    đi qua được, có trả giá
+
+CÙNG hình học, khác kết quả. Nếu hai số này bằng nhau thì khối C và scene_type
+vô nghĩa, và bạn đang train một bộ né người thường.
+
+DỰ BÁO CÓ DỊCH CHUYỂN THẬT - đo cùng ngày, người ở (2.0, -2.0) đi +y 1.0 m/s:
+
+    kênh t+0.5s  tâm vùng y = -1.25       ô ngay trước mũi robot (2.0, 0.0) = 0.09
+    kênh t+1.0s  tâm vùng y = -0.76                                          0.51
+    kênh t+1.5s  tâm vùng y = -0.29                                          0.89
+    kênh t+2.0s  tâm vùng y = +0.24                                          1.00
+
+Tức là policy NHÌN THẤY "chỗ đó 2 giây nữa sẽ có người" trước khi tới đó. Tâm
+lệch khoảng +0.25 m so với dự báo vận tốc hằng là do scene_scales của
+`crossing` nới phía trước (1.10) nhiều hơn phía sau (0.80) - cố ý, không phải
+lỗi.
+
+uncertainty_growth 0.15 m/s: dự báo càng xa càng kém tin, nên vùng NỞ RA theo
+thời gian thay vì giảm giá trị. Nên giữ khoảng cách với chỗ người ta CÓ THỂ tới
+nhiều hơn là với chỗ người ta ĐANG đứng. Đặt 0.0 để xem dự báo thô.
+
+CÔNG THỨC MỘT VÙNG  (_elliptical_region). Robot ở gốc base_link; vùng có tâm
+(cx, cy), hướng theta, ba bán trục (front, side, rear) và lõi core:
+
+    dx = -cx ;  dy = -cy
+    f  =  dx*cos(theta) + dy*sin(theta)      trục trước-sau CỦA VÙNG
+    s  = -dx*sin(theta) + dy*cos(theta)      trục ngang
+    a  = front nếu f >= 0, ngược lại rear
+    d  = hypot(f, s)
+    R  = 1 / sqrt( (f/(d*a))^2 + (s/(d*side))^2 )   tầm ellipse theo hướng đó
+    mu = clip( (R - d) / max(R - core, 1e-6), 0, 1 )
+
+mu = 1.0 khắp bên trong core, giảm tuyến tính dọc tia, = 0.0 trên biên ellipse.
+Vì tính trong frame của người nên cùng 1.0 m ở trước mặt và ở sau lưng ra hai
+số khác nhau - đó là toàn bộ ý nghĩa của front/side/rear.
+
+d = 0 (robot đứng đúng tâm vùng) được chặn riêng: R kẹp ở 1e6 nên mu = 1.0,
+đúng, vì tâm nằm trong mọi vùng theo định nghĩa. Trước khi có cái kẹp đó, lái
+vào GIỮA một cuộc nói chuyện trả về NaN, và NaN * social_penalty giết cả run.
+
+HAI LOẠI VÙNG compile_zones sinh ra. Chúng CHỒNG LÊN nhau và gộp bằng max:
+
+  cá nhân - MỌI người đều có, hardness `soft`
+    tâm      = (x, y) của người
+    theta    = facing
+    bán trục = (1.5*s_front, 1.0*s_side, 0.75*s_rear) + 0.15*t
+    core     = o_radius 0.45
+
+    Bán trục thực ở t = 0 (trước / ngang / sau, mét):
+
+        talking         1.875  1.000  0.675
+        backs_turned    1.500  0.900  0.3375
+        passing         1.650  1.350  0.600
+        walking         1.725  1.000  0.6375
+        ''              1.500  1.000  0.750
+
+  nhóm - mỗi CẶP `talking` cách nhau <= group_max_distance 3.0 m, `hard`
+    sep      = khoảng cách giữa hai người
+    tâm      = trung điểm
+    theta    = atan2(y2 - y1, x2 - x1)
+    bán trục = (sep/2 + 0.675,  1.000,  sep/2 + 0.675) + 0.15*t
+    core     = sep/2 + group_margin 0.35
+
+    0.675 = r_rear 0.75 * rear_scale 0.90 của `talking`: dọc đường nối hai
+    người thì LƯNG mỗi người quay ra ngoài (họ đang nhìn nhau), nên tầm dọc
+    trục là nửa khoảng cách cộng đúng một tầm sau.
+
+Vùng nhóm CHỒNG LÊN vùng cá nhân của hai thành viên chứ không thay thế chúng
+(đổi 30-08-2026). Bản thay thế để hở đúng sườn mỗi người: đo trên cặp cách
+2.77 m - đúng hình học kịch bản sinh ra - robot đi cách sườn một người 0.89 m
+ăn 0.000, trong khi cũng chỗ đó mà khối C không nói gì thì 0.200, đọc nhầm
+thành `crossing` thì 0.511. Nhận ĐÚNG cuộc nói chuyện lại được bảo vệ ít nhất.
+Bản hợp giữ o-space ở 1.000 và trả sườn về 0.200; `backs_turned`, `crossing`,
+`approaching` và nhãn rỗng không đổi một bit, vì chỉ `talking` mới tạo nhóm.
+
+-------------------------------------------------------------------------------
+ KHỐI B + C - GROUND TRUTH TỪ GAZEBO
+-------------------------------------------------------------------------------
+
+Lúc train, toàn bộ chuỗi nhận thức (YOLO trên RGB-D, tracker, VLM) được thay
+bằng thứ Gazebo đã biết chính xác. Lý do: đang train POLICY, mà cho nó ăn nhiễu
+detector lúc còn chưa biết lái thì không bao giờ phân biệt được một tập tồi là
+lỗi của policy hay của tracker.
+
+    /social_gt/people   pose, VẬN TỐC, facing, scene_type, QUỸ ĐẠO DỰ BÁO,
+                        radial_velocity, motion_type - do plugin
+                        animated_people_release.cpp publish, frame `world`
+    /model_states       pose của robot, frame `world`
+
+social_rl/social_rl/ground_truth.py trừ hai cái đó cho nhau ra frame robot.
+KHÔNG dùng TF, KHÔNG cần AMCL, KHÔNG cần Nav2.
+
+BA THỨ PHẢI DO PLUGIN PUBLISH, KHÔNG LẤY ĐƯỢC TỪ /model_states:
+
+  1. VẬN TỐC. twist của actor trong /model_states LUÔN BẰNG 0 - đo 28-08-2026,
+     m_sweater đang đi thấy rõ mà twist.linear vẫn (0,0,0). Plugin lái actor
+     bằng SetWorldPose(..., false, false) nên Gazebo không tính vận tốc cho
+     chúng. Plugin tự vi phân vị trí giữa hai lần publish.
+  2. scene_type. Gazebo không biết gì về nó. Plugin biết - nó chính là kịch bản
+     đang được yêu cầu diễn.
+  3. facing. Yaw đưa vào SetWorldPose KHÔNG phải hướng người nhìn: mỗi .dae
+     mang phép quay gốc riêng. Đo trên cặp actor đã tuning: mesh_yaw =
+     facing + pi/2. Kịch bản biết hướng nhìn ĐÚNG, nên nó publish thẳng.
+
+ĐỔI SANG PERCEPTION THẬT (để đo policy mất bao nhiêu vì nhiễu detector trước
+khi đưa lên robot): đặt trong rl_train.yaml
+
+    env:
+      people_source: perception
+
+rồi chạy thêm terminal perception:
+
+    ros2 launch social_rl rl_perception.launch.py
+
+Observation GIỐNG HỆT nhau ở cả hai chế độ. Đó chính là điểm mấu chốt: một
+policy train bằng ground-truth chạy được nguyên xi trên tracker thật.
+
+-------------------------------------------------------------------------------
+ GIAI ĐOẠN C -> B: DẠY LÁI TRƯỚC, DẠY XÃ HỘI SAU  (29-08-2026)
+-------------------------------------------------------------------------------
+
+Run 20260829_164308 dừng tay ở 70k/300k step sau 5 giờ. Lý do dừng, đo trên 297
+tập:
+
+    goal rate toàn run      6.8% (nửa đầu) -> 10.1% (nửa sau)
+    timeout                 69% -> 73%,  ep_len_mean 218 -> 233
+    train/std               1.002 -> 0.956  (action space là [-1,1])
+    explained_variance      0.16 -> 0.66
+    mean_peak_intrusion     0.548 -> 0.456,  unseen 0.684 -> 0.539
+
+Hai dòng cuối là tin TỐT: seen và unseen giảm song song, tỉ lệ unseen/seen còn
+thu hẹp 1.25x -> 1.18x, nên KHÔNG có chuyện policy quay lưng khỏi người để xoá
+tiền phạt. Khối D và hàm thưởng đang ăn khớp.
+
+Cái hỏng nằm ở chỗ khác. Tách theo kịch bản thì `none` - phòng TRỐNG, không
+người, không phạt xã hội, chỉ còn việc đi từ A tới B - chỉ 8.3% về đích (7/84),
+và tỉ lệ đó ĐI XUỐNG giữa run (10.0% -> 6.8%).
+
+Tính ngược khoảng cách còn lại từ `return`, dùng chính công thức hàm thưởng
+(social = 0 nên return = -0.8*steps + 40*net_progress):
+
+    timeout 250 steps  d0=5.80 m  net 0.22 m  ->  còn 5.58 m
+    timeout 250 steps  d0=4.92 m  net 1.99 m  ->  còn 2.93 m
+    timeout 250 steps  d0=4.57 m  net 3.04 m  ->  còn 1.54 m
+    timeout 250 steps  d0=4.92 m  net 4.20 m  ->  còn 0.72 m
+
+Dừng cách đích 1.4-3.0 m là chuyện thường. Đây KHÔNG phải "trượt 0.35 m cuối"
+mà là chưa lái được. Chừng nào robot chưa đi nổi từ A tới B trong phòng trống
+thì mọi số liệu social/* đều là nhiễu, và không phân biệt được "policy tồi" với
+"trường ràng buộc sai".
+
+GIAI ĐOẠN C - `none` chiếm đa số, hai khoá đổi trong rl_train.yaml:
+
+    env.scenarios     tỉ lệ 6:1:1:1 -> none 67%, ba tình huống xã hội 33%
+    train.ent_coef    0.005 -> 0.001
+
+    reward: GIỮ NGUYÊN HOÀN TOÀN. Cố ý - đổi thang phạt ở đây thì value
+    function phải học lại từ đầu lúc resume sang giai đoạn 2.
+
+VÌ SAO KHÔNG PHẢI `none` THUẦN (đo 29-08-2026). Kịch bản không người thì 5 kênh
+K_soc vào bằng 0, mà dL/dW = grad_out ⊗ input, nên gradient của W[:,1:6] trong
+conv đầu (shape 32,6,5,5 kể từ 30-08-2026; lúc đo là 32,5,5,5) BẰNG 0 TUYỆT ĐỐI:
+
+    ch0 occupancy   |grad| L2 = 2.71e+00
+    ch1..ch5 K_soc  |grad| L2 = 0.00e+00,  sau 50 bước Adam đổi 0.000e+00
+
+Năm kênh đó đóng băng nguyên ở giá trị khởi tạo. SB3 không có weight decay nên
+Adam cũng không đụng tới được.
+
+CÚ SỐC LÚC BẬT NGƯỜI TRỞ LẠI THÌ KHÔNG ĐÁNG LO - đừng suy từ feature ra hành
+vi. Đo trên checkpoint train thuần `none`: feature CNN đổi 26.6% (17.7-40.1%
+qua 5 seed) nhưng tới action chỉ 0.5% dải, trong khi nhiễu exploration của
+chính policy là 47% dải. Zero-hoá W[:,1:6] trước khi resume đưa cú sốc về đúng
+0.00e+00 (kỹ thuật zero-init của ControlNet/LoRA, gradient vẫn khác 0 vì input
+khác 0) - nhưng nó chữa thứ không đau, đừng bận tâm.
+
+VẤN ĐỀ THẬT là khác: `none` thuần bắt giai đoạn sau học phần xã hội TỪ SỐ 0
+đúng lúc kỹ năng lái còn mới, dưới social_penalty -8/step. Đó là kịch bản đã
+làm hỏng run 20260827_013703. Giữ 1/3 tập có người thì 5 kênh đó nhận gradient
+đều đặn và không có bước nhảy phân phối nào để phải hồi phục.
+
+Vì sao đụng ent_coef: entropy_loss -2.74 nhân ent_coef 0.005 = 0.0137, trong
+khi policy_gradient_loss chỉ khoảng -0.005. Thưởng entropy đang lấn át gradient
+policy nên log_std không co lại được, và std 0.95 trên [-1,1] nghĩa là mỗi bước
+còn cộng nhiễu +-0.48 m/s, +-0.96 rad/s lên chính lệnh policy chọn.
+
+TIÊU CHÍ QUA C: scenario/none_goal >= 0.6. Chưa qua thì đừng đọc social/*.
+
+BỎ TIÊU CHÍ train/std <= 0.6 - nó SAI. Run 20260829_222950 kết thúc với
+std 0.964, gần như không co, mà vẫn về đích 88% ở `none`. Giả thuyết ban đầu
+(nhiễu action là thứ chặn policy tới đích) không đứng vững, và ent_coef
+0.005 -> 0.001 gần như không đổi đường đi của std so với run trước. Thứ thực
+sự đổi cục diện nhiều khả năng là bỏ phần lớn áp lực phạt xã hội ra khỏi giai
+đoạn học lái. Đọc kết quả, đừng đọc std.
+
+KẾT QUẢ GIAI ĐOẠN C - run 20260829_222950, 120k step, 749 tập:
+
+    vùng 90k-97k    none 88.2% về đích, hit 7.8%, timeout 3.9%   <- ĐỈNH
+    vùng 113k-120k  none 62.5% về đích, hit 18.8%, timeout 18.8%
+
+    đỉnh từng update: 91648 và 94720 đều goal 1.00, ep_rew 200-228
+    đáy: 114176 goal 0.25, hit 0.40, ep_rew 3.0
+
+TRAIN QUÁ TAY 25k STEP THÌ MẤT. Từ 97k policy thoái lui, hồi phục một phần ở
+120k nhưng không về lại đỉnh. Cùng dạng với run 20260827_013703. Hệ quả thực
+tế: final_model.zip KHÔNG phải bản tốt nhất - dùng
+checkpoints/recurrent_ppo_95000_steps.zip. Đó cũng là lý do checkpoint_every
+hạ từ 5000 xuống 2500.
+
+VỀ ĐÍCH KHÔNG CÓ NGHĨA LÀ BIẾT NÉ. Ở chính vùng đỉnh, intrusion trung bình là
+0.830 (approaching), 0.705 (crossing), 0.626 (talking) - policy đi xuyên qua
+người. Đúng như thiết kế: C chỉ dạy lái. Né là việc của giai đoạn 2.
+
+TỐC ĐỘ. Đo 29-08-2026 trên smoke 2 tập KHÔNG NGƯỜI: 250 step trong 60.0 s =
+4.17 step/s, so với 3.0 step/s của run đầy đủ - không còn actor nào để mô phỏng
+và publish ground-truth. Với tỉ lệ 6:1:1:1 thì ước tính khoảng 3.7 step/s, tức
+100k step là chừng 7.5 giờ. CHƯA ĐO, đọc `fps` trong bảng SB3 để biết số thật.
+
+SANG GIAI ĐOẠN 2 (đã làm 30-08-2026): env.scenarios trả về 1:1:1:1,
+checkpoint_every 2500, n_steps 512 -> 2048, rồi resume từ ĐỈNH chứ không phải
+từ final_model:
+
+    ros2 launch social_rl rl_train.launch.py \
+      resume:=~/social_rl_runs/20260829_222950/checkpoints/recurrent_ppo_95000_steps.zip \
+      timesteps:=60000
+
+timesteps khi resume nghĩa là TRAIN THÊM ngần đó: _setup_learn cộng
+total_timesteps += num_timesteps, nên 60000 chạy từ 95k tới 155k, và
+tensorboard vẽ tiếp từ 95k chứ không đè lên đoạn cũ. Thư mục tensorboard của
+run resume là RecurrentPPO_0 chứ không phải _1 - SB3 không tăng số khi
+reset_num_timesteps=False.
+
+LÀM LẠI TỪ ĐẦU (30-08-2026): thêm kênh t=0.0 đổi conv đầu sang (32,6,5,5) nên
+KHÔNG checkpoint nào resume được nữa - check_resume_layout() chặn ngay lúc
+khởi động. Cả 20260829_222950 lẫn các bản trước đều bỏ.
+
+env.scenarios quay lại 6:1:1:1 (`none` 67%) vì policy học lái từ trọng số ngẫu
+nhiên lần nữa; số liệu social/* chưa có nghĩa chừng nào robot chưa đi nổi từ A
+tới B trong phòng trống. KHÔNG dùng `none` thuần - lý do đã đo, ghi ở mục
+"VÌ SAO KHÔNG PHẢI `none` THUẦN" phía trên.
+
+    ros2 launch social_rl rl_train.launch.py
+
+-------------------------------------------------------------------------------
+ 31-08-2026: GIAI ĐOẠN 1 XONG - SANG GIAI ĐOẠN 2 (1:1:1:1, n_steps 4096)
+-------------------------------------------------------------------------------
+
+GIAI ĐOẠN 1 ĐÃ QUA, run 20260831_003647: 6:1:1:1, train từ trọng số ngẫu nhiên,
+100000 step trong 6.33 h (00:36 -> 06:56), 40 checkpoint. Đây là run làm lại sau
+khi thêm kênh t=0.0, conv đầu (32,6,5,5).
+
+    step     none_goal  goal   hit    timeout  peak_intr
+    92160      1.000    0.950  0.050   0.000     0.310
+    94208      0.938    0.950  0.050   0.000     0.158
+    96256      0.923    0.900  0.100   0.000     0.206
+    98304      0.929    0.950  0.050   0.000     0.084
+    100352     0.929    0.900  0.100   0.000     0.150
+
+`scenario/none_goal` trung bình 0.944 ở vùng cuối, TIÊU CHÍ LÀ >= 0.6 nên qua
+thoải mái; timeout về 0.000. Có một cú tụt giữa run (55296-63488, none_goal
+0.40-0.53) rồi hồi phục hẳn.
+
+KHÔNG THOÁI LUI Ở CUỐI - khác run tham chiếu 20260829_222950 (đỉnh 90k-97k rồi
+mất). Run này kết thúc ngay trong vùng tốt nhất, nên ở ĐÂY checkpoint 100000
+CHÍNH LÀ đỉnh. Đừng suy ra là quy tắc chung: vẫn phải đọc đường cong trước khi
+chọn, `final_model.zip` không tự động đúng.
+
+VỀ ĐÍCH KHÔNG PHẢI LÀ BIẾT NÉ, lặp lại lần nữa: `peak_intr` 0.084-0.310 ở vùng
+cuối đo trên tập mà 67% là phòng trống, nên nó nói rất ít. Né là việc giai đoạn 2.
+
+GIAI ĐOẠN 2 - MỘT khoá đổi trong rl_train.yaml:
+
+    env.scenarios   6:1:1:1 -> 1:1:1:1 (mỗi kịch bản 25%)
+    train.n_steps   GIỮ 2048 (đã cân nhắc 4096 rồi bỏ, xem dưới)
+
+    reward: GIỮ NGUYÊN HOÀN TOÀN, cùng lý do như lần trước - đổi thang phạt thì
+    value function phải học lại từ đầu đúng lúc resume.
+
+    ros2 launch social_rl rl_train.launch.py \
+      resume:=~/social_rl_runs/20260831_003647/checkpoints/recurrent_ppo_100000_steps.zip \
+      timesteps:=60000
+
+ĐÃ CÂN NHẮC n_steps 4096 RỒI GIỮ 2048. Độ phủ một rollout (xác suất một lần cập
+nhật thấy đủ cả 4 kịch bản, tính bằng inclusion-exclusion; số tập mỗi rollout =
+n_steps chia ep_len_mean, ep_len_mean đo được 171-233):
+
+    tỉ lệ            n_steps 2048              n_steps 4096
+                  ep171  ep200  ep233       ep171  ep200  ep233
+    1:1:1:1       87.4%  79.5%  69.4%       99.6%  98.9%  97.5%
+    3:2:1:1       68.6%  59.1%  49.2%       95.0%  91.5%  86.7%
+    6:1:1:1       40.8%  31.5%  23.6%       82.9%  74.8%  65.7%
+
+Bảng này nói 4096 tốt hơn, và TỔNG GRADIENT STEP KHÔNG ĐỔI - 60k step cho đúng
+4800 lần ở cả hai (2048: 16 minibatch x 10 epoch x 30 rollout; 4096: 32 x 10 x
+15). Nhưng thứ quyết định lại KHÔNG nằm trong bảng:
+
+  1. 4096 gộp cùng số gradient step ấy vào MỘT NỬA số vòng cập nhật policy - 15
+     thay vì 30 cho 60k step. PPO tiến bộ theo số vòng cải thiện, nên đây là
+     mất mát thật, không phải chuyện hiển thị.
+  2. 10 epoch trên rollout dài gấp đôi thì tới epoch cuối dữ liệu lệch xa policy
+     hiện tại hơn. clip_range 0.2 chặn, nhưng train/clip_fraction sẽ nhích lên.
+  3. Mỗi điểm tensorboard cách nhau 17.5 phút thay vì 8.7, nên phát hiện thoái
+     lui muộn hơn - đúng thứ đã làm mất run 20260829_222950 (đỉnh 90k-97k) và
+     run 20260827_013703.
+
+checkpoint_every 2500 độc lập với n_steps, nên dù chọn số nào cũng vẫn 24
+checkpoint cho 60k step - vẫn đủ dày để quay về đúng đỉnh sau khi đọc đường cong.
+
+MỐC ĐỂ ĐỔI LÊN 4096: `scenario/*_goal` lệch nhau bất thường giữa các điểm liền
+kề, tức gradient đang bị kịch bản tình cờ rơi vào chi phối. Sửa một dòng rồi
+--resume, n_steps nằm trong RESUMABLE_KEYS nên không mất gì.
+
+ĐÃ BỎ, KHÔNG CHẠY TẬP NÀO: bản 3:2:1:1 nghiêng về `talking` đặt sáng 31-08.
+Nghiêng về một kịch bản làm TỤT độ phủ xuống 49.2-68.6%, đúng thứ gây giật giữa
+các kịch bản mà nó định chữa. Muốn ưu tiên `talking` thì đòn bẩy là hàm thưởng
+hoặc scene_scales, không phải tỉ lệ bốc kịch bản.
+
+`backs_turned` VẪN CHƯA CÓ trong list dù plugin dựng được
+(animated_people_release.cpp:1041). Nó là case ĐỐI CHỨNG của cả kiến trúc -
+cùng hình học, `talking` ~1.0 còn `backs_turned` phải thấp hơn hẳn - nên phải
+train, nhưng loại thứ năm làm loãng mỗi rollout. Để sau khi bốn loại này đứng.
+
+BẪY ĐÃ KIỂM LẠI 31-08-2026: `--resume` nuốt mục `train:` thì resume_overrides()
+chặn đúng - chạy thử với checkpoint 100000 và n_steps 4096 trong YAML thì nó in
+`[social_rl] override n_steps: 2048 -> 4096`. Với n_steps 2048 như hiện tại,
+YAML trùng checkpoint nên KHÔNG có dòng override nào cho n_steps - đó là bình
+thường, không phải override hỏng.
+
+train.total_timesteps 300000 -> 100000: đỉnh của run tham chiếu nằm ở 90k-97k
+rồi thoái lui, nên 100k ôm trọn vùng đỉnh và không trả tiền cho đoạn mất.
+
+TỐC ĐỘ THẬT, tính từ monitor.csv (tổng cột `l` chia cho `t` cuối cùng, tức
+ĐẦU-CUỐI kể cả lúc PPO cập nhật mạng):
+
+    20260829_222950   none 67%   120299 step / 8.71 h   3.84 step/s
+    20260829_164308   none 25%    71257 step / 5.08 h   3.90 step/s
+    20260830_084506   none 25%    61358 step / 4.55 h   3.75 step/s
+    20260830_144500   none 25%    61297 step / 3.91 h   4.36 step/s
+
+=> 100k step khoảng 7.2 giờ (dải 6.4-7.4 h).
+
+TỈ LỆ `none` KHÔNG ĐỔI TỐC ĐỘ: 67% cho 3.84 step/s còn 25% cho 3.90. Ước tính
+cũ trong mục giai đoạn C ("6:1:1:1 nhanh hơn nhờ ít actor, ~3.7 step/s") SAI -
+nút thắt ở real_time_update_rate, không ở số actor.
+
+TIÊU CHÍ QUA GIAI ĐOẠN: scenario/none_goal >= 0.6. Đạt thì đổi env.scenarios
+về 1:1:1:1 rồi --resume từ ĐỈNH (checkpoints/, KHÔNG phải final_model.zip).
+Đừng đọc train/std - tiêu chí std <= 0.6 đã bị bác bỏ ở mục giai đoạn C.
+
+VÌ SAO n_steps 2048. Với 4 kịch bản bốc đều, n_steps 512 chỉ chứa 2.2 tập
+(ep_len 233) tới 3.0 tập (ep_len 171) mỗi lần cập nhật, nên xác suất một
+rollout thấy đủ cả 4 kịch bản BẰNG 0%: gradient mỗi lần cập nhật bị chi phối
+bởi kịch bản nào tình cờ rơi vào. Đo trên run 164308, độ lệch chuẩn giữa các
+update:
+
+    scenario/crossing_goal      tb 0.060   độ lệch chuẩn 0.117
+    scenario/talking_goal       tb 0.032   độ lệch chuẩn 0.074
+    scenario/approaching_goal   tb 0.119   độ lệch chuẩn 0.144
+    outcome/goal (gộp)          tb 0.087   độ lệch chuẩn 0.073
+
+Các đường TÁCH dao động gấp đôi giá trị trung bình còn đường GỘP thì không -
+phương sai đến từ việc lấy mẫu kịch bản, không phải từ policy.
+
+2048 với ep_len 160 cho 12.8 tập/rollout, P(đủ 4 loại) = 87%. Và nó KHÔNG mất
+gradient step nào: 512 cho 4 minibatch x 10 epoch x 117 rollout = 4680, còn
+2048 cho 16 x 10 x 29 = 4640. Cùng số env step và cùng batch_size thì tổng số
+lần cập nhật trọng số gần như không đổi, chỉ là mỗi lần dựa trên dữ liệu đa
+dạng hơn.
+
+CHƯA ĐO A/B trong stack này - phần trên là toán cộng số liệu phương sai, không
+phải hai run đặt cạnh nhau. Muốn chắc thì chạy 20k step rồi so độ lệch chuẩn
+của scenario/*_goal với bảng trên.
+
+ĐỪNG TÁCH RA TRAIN TỪNG KỊCH BẢN MỘT để chữa chuyện này. Học riêng từng case
+là đúng công thức tạo ra quên - xem lại chuyện `none` thuần ở trên.
+
+-------------------------------------------------------------------------------
+ BẪY: Ctrl+C TRAINER XONG THÌ GAZEBO ĐỨNG HÌNH  (29-08-2026)
+-------------------------------------------------------------------------------
+
+env.pause_between_steps = true nghĩa là physics đang PAUSE ở phần lớn thời gian.
+Ctrl+C (SIGINT) rơi vào đúng lúc đó thì env.close() không unpause lại được:
+
+    [WARN] could not unpause on close: /unpause_physics timed out after 10.0 s
+
+Đã gặp 2/2 lần dừng bằng SIGINT ngày 29-08-2026. Trainer vẫn lưu final_model.zip
+bình thường, nhưng gzserver ở lại trạng thái pause, và triệu chứng sau đó là
+"mọi topic im lặng, không lỗi ở đâu cả".
+
+SỬA, chạy ngay sau khi Ctrl+C:
+
+    ros2 service call /unpause_physics std_srvs/srv/Empty
+
+KIỂM TRA rồi mới tin - đọc /clock hai lần cách nhau vài giây, giá trị phải tăng:
+
+    ros2 topic echo --once --field clock.sec /clock
+
+Trainer tự kết thúc vì hết timesteps thì KHÔNG dính - lần chạy hết 1024 step
+đóng sạch, không có dòng WARN nào.
+
+-------------------------------------------------------------------------------
+ BẪY: --resume NUỐT TOÀN BỘ MỤC `train:`  (29-08-2026)
+-------------------------------------------------------------------------------
+
+train.py nạp checkpoint bằng
+
+    RecurrentPPO.load(resume_path, env=env, device=device,
+                      tensorboard_log=run_dir)
+
+và KHÔNG truyền hyperparameter nào. SB3 khôi phục hết từ khối `data` trong file
+zip. Mở recurrent_ppo_65000_steps.zip ra đọc thì thấy nằm sẵn trong đó:
+
+    ent_coef 0.005 | n_steps 512 | batch_size 128 | learning_rate 0.0003
+
+Nghĩa là khi --resume:
+
+    observation:      CHẶN CỨNG - check_resume_layout so từng khoá, lệch một
+                      khoá là RuntimeError
+    env:, reward:     CÓ TÁC DỤNG - đọc lúc dựng env, không nằm trong zip
+    train:            BỊ BỎ QUA, KHÔNG CẢNH BÁO NÀO
+
+ĐÃ SỬA 30-08-2026. train.py có resume_overrides(): đọc mục `train:` rồi ép vào
+load(custom_objects=...). Chỉ ép những khoá KHÔNG đổi hình dạng mạng:
+
+    learning_rate  n_steps  batch_size  n_epochs  gamma  gae_lambda
+    clip_range     ent_coef  vf_coef    max_grad_norm
+
+Kiến trúc (cnn_features, lstm_hidden_size, pi_layers, vf_layers) KHÔNG ép được
+- nó nằm trong policy_kwargs và set_parameters chạy với exact_match=True nên
+lệch một lớp là lỗi shape. observation: vẫn do check_resume_layout chặn.
+
+Cơ chế: load() làm __dict__.update(data) -> __dict__.update(kwargs) ->
+_setup_model() -> set_parameters(). custom_objects thay giá trị TRƯỚC
+_setup_model, nên n_steps mới dựng lại rollout buffer đúng cỡ; trọng số nạp
+SAU CÙNG nên không bị đụng.
+
+Đo 30-08-2026 trên checkpoint 95k, ép ent_coef 0.001->0.005, lr 3e-4->1e-4,
+n_steps 512->1024:
+
+    model.ent_coef 0.005 | n_steps 1024 | lr_schedule 0.0001
+    rollout_buffer.buffer_size 1024      | num_timesteps van 95000
+    sai khac trọng số so với trong zip = 0.00e+00
+
+Mỗi khoá bị đổi được IN RA lúc khởi động (`[social_rl] override ...`). Không
+thấy dòng đó nghĩa là YAML trùng checkpoint, không phải override hỏng.
+
+-------------------------------------------------------------------------------
+ BẪY: MỘT LẦN CẬP NHẬT PHÁ HỎNG CẢ POLICY  (31-08-2026)
+-------------------------------------------------------------------------------
+
+Run 20260831_145903 chết sau 8k step. Diễn biến theo từng rollout:
+
+    172.5k-174.5k   33 tập   về đích 100%   timeout  0%   bước TB  60.6
+    174.5k-176.6k   26 tập            88%            8%            80.1
+    176.6k-178.6k   29 tập            93%            0%            69.3
+    178.6k-180.7k   25 tập            92%            4%            77.5
+    180.7k-182.7k    9 tập             0%           89%           232.3
+    182.7k-184.8k    9 tập             0%           89%           231.0
+    184.8k-186.8k    4 tập             0%          100%           250.0
+
+Sập trong ĐÚNG MỘT lần cập nhật, không trượt dần.
+
+DẤU HIỆU PHÂN BIỆT: `scenario/none_goal` cũng về 0.000. `none` là kịch bản
+KHÔNG CÓ NGƯỜI - phòng trống, không vùng ràng buộc nào - mà robot vẫn timeout
+250 bước. Hỏng là KỸ NĂNG LÁI, không phải phần xã hội. Đây là cách nhanh nhất
+để tách "policy hỏng" khỏi "policy sợ người": nhìn `none_goal` trước tiên.
+
+KHÔNG PHẢI MÔI TRƯỜNG: `worst step overshoot 0 ms` ở cả 136 tập, 0 dòng
+[WARN]/[ERROR] trong log, gzserver 60% CPU.
+
+NGUYÊN NHÂN:
+
+    train/approx_kl      0.083  0.033  0.043   0.218   0.028
+    train/clip_fraction  0.286  0.237  0.221   0.446   0.319
+
+Lần cập nhật thứ 4 ở approx_kl 0.218, gấp 5-7 lần nền 0.03-0.04. Rollout NGAY
+SAU nó là rollout 0%. train.py dựng RecurrentPPO mà không truyền `target_kl`,
+mặc định SB3 là None, tức không có chốt dừng sớm: chạy đủ n_epochs 10 trên
+cùng lô dữ liệu dù policy đã đi xa đến đâu.
+
+GIẢ THUYẾT ĐÃ KIỂM VÀ LOẠI BỎ: nghi bản sửa kịch bản sinh ra return âm cực
+đoan mới. Đo lại thì phân bố giống hệt - run cũ min -777.4 và 5.1% số tập dưới
+-200; run mới min -788.7 và 4.4%. Outlier không mới, không phải nguyên nhân.
+
+ĐÃ SỬA: `target_kl: 0.05` trong mục train: của rl_train.yaml, và thêm
+'target_kl' vào RESUMABLE_KEYS để --resume cũng nhận. Lúc khởi động phải thấy
+dòng `[social_rl] override target_kl: None -> 0.05`; không thấy là chưa ăn.
+
+KHÔNG TỰ HỒI ĐƯỢC. 3 rollout liên tiếp 0%, train/std đứng yên 0.742-0.743,
+entropy_loss không đổi. Gặp dạng này thì dừng, lấy checkpoint TRƯỚC cú sập, đừng
+chờ nó tự khá lên.
+
+-------------------------------------------------------------------------------
+ NGƯỜI ĐƯỢC ĐẶT THEO TUYẾN THẬT CỦA TỪNG TẬP  (31-08-2026)
+-------------------------------------------------------------------------------
+
+TRIỆU CHỨNG. Checkpoint 197500 xử lý `talking` theo kiểu NHỊ PHÂN, không phải
+"giỏi vừa vừa". 16 tập quanh mốc đó:
+
+    né sạch      11/16 (69%)   peak 0.00   gần nhất 1.70 m   Sigma 0.28
+    chen thẳng    5/16 (31%)   peak 1.00   gần nhất 0.20 m   Sigma 17.33
+
+(đi thẳng xuyên qua = 20.0, né tối ưu = 0.36). Không có tập nào ở giữa.
+
+NGUYÊN NHÂN. Plugin đặt người quanh MỘT tuyến cố định - route_start_/route_end_
+mặc định (-3,-2) -> (1.2,0.3) world, tức (0,0) -> (4.2,2.3) trong odom. Nhưng
+ros_env bốc start_pose và goal mới mỗi tập từ 4 x 4 = 16 tổ hợp, và chỉ gửi mỗi
+TÊN kịch bản. Nên biên lệch 0.4-1.4 m là lệch so với tuyến DANH NGHĨA, không
+phải so với đường robot thật sự đi.
+
+Chiếu lên tuyến thật, 16 tổ hợp, 8000 lần bốc:
+
+    biên spawn      <0.5 m (cao nguyên)   0.5-1.6 m (có dốc)   >1.6 m
+    [0.0, 0.5]            45.0%                52.3%            2.7%
+    [0.4, 1.4]            30.6%                52.3%           17.1%
+    [0.4, 1.0]            37.0%                52.7%           10.3%
+
+30.6% khớp với 31% thất bại quan sát được. Trong nhóm đó cặp chắn đúng giữa
+đường robot đi, và trường ở hình học ấy là cao nguyên rồi vách (20.00 -> 21.00
+-> 19.86 rồi mới sập xuống 0.36 ở 2.4 m): không có dốc, policy không học được.
+
+Bảng này cũng giải thích vì sao thu biên về [0.4, 1.0] làm KÉM ĐI - nó đẩy tỉ
+lệ cao nguyên từ 30.6% lên 37.0%.
+
+ĐÃ SỬA. Lệnh kịch bản mang thêm tuyến của chính tập đó:
+
+    "<scenario>"                           <- vẫn nhận, dùng tuyến mặc định
+    "<scenario> <seed>"                    <- vẫn nhận
+    "<scenario> route x0 y0 x1 y1"         <- MỚI, world frame
+
+  - animated_people_release.cpp  SelectScenario parse thêm từ khoá `route`.
+    Dùng từ khoá chứ không phải bốn số trần, vì seed cũng là số trần.
+  - ros_env.py  _with_route/_episode_route, dùng gazebo_world.map_to_world để
+    đổi goal_frame -> world (đọc cạnh world->map từ TF, không hard-code offset).
+  - ros_env.py  reset() ĐỔI THỨ TỰ: lấy pose robot và bốc goal TRƯỚC, rồi mới
+    publish kịch bản. Trước đây publish trước nên bố cục được chọn theo tuyến
+    của tập TRƯỚC ĐÓ. scenario_settle_time giờ nằm sau lần spawn, đúng vai trò.
+  - _refill_scenario gửi lại đúng tuyến ấy.
+
+Với tuyến đúng thì biên [0.4, 1.0] mới là biên nên dùng: mọi giá trị trong đó
+nằm trong vùng 67-100% số tập có dốc bám được, còn 1.0-1.4 tụt về 72% rồi 40%.
+GIỮ [0.4, 1.0], đừng trả về 1.4.
+
+    KIỂM CHỨNG (Gazebo VỪA khởi động lại sau khi build):
+
+        python3 ~/rl_view/check_route.py
+
+    Gửi hai tuyến khác hẳn nhau rồi đo lệch của cặp so với chính tuyến vừa gửi.
+    Phải in `DAT`. Ra `CHUA DAT` nghĩa là gzserver còn ôm .so cũ.
+
+    ~/rl_view/check_talking_offset.py CHỈ đúng trên Gazebo mới khởi động, vì nó
+    đo so với tuyến mặc định - sau khi một run đã chạy thì route_ đã bị ghi đè.
+
+-------------------------------------------------------------------------------
+ BỐN KỊCH BẢN, BỐC NGẪU NHIÊN MỖI TẬP
+-------------------------------------------------------------------------------
+
+Trainer chỉ gửi TÊN qua /animated_people/scenario; plugin tự bốc hình học quanh
+tuyến đường robot đang học. Nhờ vậy cùng scene_type nhưng mỗi tập người đứng
+một chỗ khác - nếu cố định thì policy học thuộc VỊ TRÍ chứ không học TÌNH HUỐNG.
+
+    talking        hai người đứng đối mặt nói chuyện, trục quay ngẫu nhiên,
+                   khoảng cách 1.0 - 1.5 m (11-09-2026, trước là 1.6 - 2.8 m),
+                   tâm cặp lệch 0.4 - 1.0 m khỏi tuyến về một bên bốc ngẫu
+                   nhiên (xem mục ngay dưới)
+    crossing       MỘT người đi CẮT NGANG tuyến đường, vuông góc, 0.8-1.0 m/s
+                   (11-09-2026, trước 0.40-0.75 m/s - CHƯA re-tune lại timing
+                   cắt ngang theo route ratio, xem cảnh báo tại chỗ sửa trong
+                   animated_people_release.cpp)
+    approaching    MỘT người đi ĐỐI ĐẦU về phía robot, 0.8-1.0 m/s
+                   (11-09-2026, trước 0.5-0.9 m/s)
+    backs_turned   hai người đứng sát vai nhau, cùng QUAY LƯNG về phía robot
+    waiting        (11-09-2026, ĐỔI TÊN từ `standing`) MỘT người, spawn qua
+                   RoutePoint() Y HỆT `talking`/`backs_turned` (an toàn,
+                   không đụng đồ đạc) - KHÔNG còn đứng sát một kệ sách thật
+                   nữa (bản đầu neo vào BookshelfA_01_001, không kiểm tra
+                   được mesh bằng mắt nên actor đâm vào kệ, đã bỏ). `facing`
+                   là GÓC NHÌN THẬT về phía kệ BookshelfA_01_001 (world
+                   1.405153, -1.449740, hardcode trong SpawnWaitingPeople) -
+                   chỉ để hợp lý về mặt hình ảnh, KHÔNG dùng để tính d_obj.
+                   d_obj trong công thức Gauss là hằng số
+                   constraint_field.waiting_distance (0.7 m mặc định,
+                   rl_train.yaml), không phải khoảng cách thật tới kệ - xem
+                   comment đầu SpawnWaitingPeople(). CHỈ CHẠY ĐƯỢC hợp lý về
+                   mặt hình ảnh TRÊN bookstore.world; lirs_test.world không
+                   có kệ đó nên `facing` chỉ trỏ vào một toạ độ vô nghĩa,
+                   không lỗi nhưng không có ý nghĩa hình ảnh.
+                   Đừng thêm `waiting` vào env.scenarios cho tới khi đã nhìn
+                   bằng mắt trong Gazebo rằng người đứng đúng chỗ hợp lý.
+    none           không có ai - giữ trong danh sách để policy không mặc định
+                   "lúc nào cũng có người" rồi mất lòng tin vào trường rỗng
+
+SỐ NGƯỜI CÒN MỘT (28-08-2026). Trước đó crossing có 35% và approaching có 30%
+số tập ra HAI người; đo 40 lần thả ra 70/30, khớp code. Đã đổi cả hai thành
+đúng một. Đo lại sau khi sửa: 18/18 lần thả ra đúng 1 người.
+
+Đánh đổi: không còn tập nào robot phải chọn KHE GIỮA HAI NGƯỜI cùng cắt ngang -
+tình huống duy nhất trong `crossing` bắt policy đọc trường ràng buộc thay vì chỉ
+né vật gần nhất. Giờ phần đó dồn hết vào `talking`. Khôi phục là đổi lại một
+dòng `const int count` trong mỗi hàm spawn.
+
+CẶP `talking` KHÔNG CÒN ĐỨNG CHẮN GIỮA TUYẾN (31-08-2026). Trước đó
+animated_people_release.cpp thả tâm cặp ở `NextUniform(-0.5, 0.5)` m so với
+tuyến, tức gần như tập nào cặp cũng chắn ngay trước mũi robot. Đó lại đúng là
+hình học DUY NHẤT policy không học được.
+
+Đo trên chính trường world này sinh ra: quét độ lệch của robot từ -3.2 đến
++3.2 m và hỏi tích phân intrusion có đường đi xuống liên tục từ "đi thẳng" tới
+"sạch" hay không.
+
+    lệch của cặp   Σ khi đi thẳng   % tập có dốc bám được
+         0.0 m              26.0                      6%
+         0.4 m              24.4                     67%
+         0.8 m              20.0                    100%
+         1.2 m               8.9                     72%
+         1.6 m               2.7                     28%
+         2.0 m               0.1                      0%
+
+Ngay giữa tuyến thì trường là CAO NGUYÊN RỒI VÁCH: nhích sang trái hay phải một
+chút đều đắt NGANG với đi xuyên qua (20.00 -> 21.00 -> 19.86 rồi mới sập xuống
+0.36 ở 2.4 m), nên gradient không có gì để bám và hai nghiệm đúng nằm hai bên
+một cái rào. Quá 1.6 m thì không còn gì để né, tập đó thành `none` đội lốt.
+
+Hệ quả đo được trên run 20260831_073715 (100k -> 200k, KHÔNG có bản sửa này):
+điểm né `talking` là 17% -> 17% -> 2% -> 6% -> 41% qua 5 đoạn, tức không học
+được gì suốt 100k step, trong khi `crossing` giữ 84-97% và `approaching`
+66-88%. Hai kịch bản kia có profile ĐƠN ĐIỆU nên học được; `talking` thì không.
+Phí xã hội mỗi tập: talking 143.5 điểm, crossing 20.8, approaching 48.9.
+
+Đã đổi thành `side * NextUniform(0.4, 1.4)` với `side` bốc ±1. Đây là GIAI ĐOẠN
+MỘT của curriculum: dạy QUY TẮC HƯỚNG "đi ra xa trường". Xong giai đoạn này thì
+nới dần về 0.0 để policy xử lý được cả ca cặp chắn chính giữa, ca mà nó phải tự
+phá đối xứng.
+
+THU BIÊN 1.4 -> 1.0 (31-08-2026, lần hai). Biên [0.4, 1.4] ĂN: run
+20260831_160225 đưa điểm né `talking` từ 8% lên 73% ở checkpoint tốt nhất
+(197500), giữ về đích 97% và đâm 0%. Nhưng nó mua bằng một kiểu hỏng mới:
+
+    5/17 tập `talking` ở nửa sau timeout NGUYÊN 250 bước, `peak 1.00`,
+    `gần nhất` 0.12-0.22 m, return xuống tới -863.
+
+Robot NẰM TRONG lõi vùng suốt tập chứ không phải lưỡng lự ở xa. Đó là TÚI CỤT:
+lệch đủ xa thì cặp đứng gần tường, phía còn lại hết chỗ, mà robot vẫn có thể
+chọn đúng phía đó - và `allow_reverse: false` (ros_interface.py:216, đế xe
+không có cảm biến sau) nên nó không lùi ra được, phải quay đầu trong khe hẹp.
+
+Đầu trên của biên vừa tạo ra túi cụt, vừa là đầu mua được ÍT nhất:
+
+    lệch 0.8 m -> 100% tập có dốc bám được, tích phân đi thẳng 20.0
+    lệch 1.2 m ->  72%                    , tích phân đi thẳng  8.9
+
+Nên cắt về [0.4, 1.0]. Mốc để đọc kết quả: `outcome/timeout` phải dưới 10% và
+`scenario/talking_goal` giữ trên 0.90, trong khi điểm né `talking` không tụt
+dưới 70%.
+
+KÈM THEO: max_episode_steps 250 -> 150 (31-08-2026). Thu biên chỉ chuyển được
+4.6% số tập từ "chỉ một bên đi được" sang "bên nào cũng được" (đo bằng Monte
+Carlo 4000 tập trên cafe_vlm.pgm) - nên nó KHÔNG dập được kiểu kẹt. Cắt trần
+bước là để làm mỗi lần chọn nhầm bên rẻ đi 40%: return xấu nhất từ -863 xuống
+khoảng -500, giảm phương sai advantage.
+
+ĐO ĐƯỢC TRÊN BẢN ĐỒ, ĐỪNG LẶP LẠI SUY LUẬN SAI: KHÔNG BAO GIỜ có chuyện cả hai
+bên đều bị bịt - 0% ở mọi biên đã thử. Robot kẹt là do CHỌN NHẦM BÊN rồi không
+lùi ra được (allow_reverse: false), không phải do hết chỗ.
+
+    biên spawn          cả hai bên đi được   chỉ MỘT bên   tắc cả hai
+    [0.0, 0.5] gốc              79.7%           20.3%          0%
+    [0.4, 1.4]                  60.5%           39.5%          0%
+    [0.4, 1.0] hiện tại         65.1%           34.9%          0%
+
+CẢNH BÁO KÈM THEO, PHẢI THEO DÕI: rút trần bước làm ĐỨNG YÊN RẺ ĐI.
+
+    T = 250:  đứng yên cả tập = -200, bằng đúng đâm tường (-200)
+    T = 150:  đứng yên cả tập = -120, RẺ HƠN đâm tường
+
+Trần của step_penalty là |obstacle_collision_penalty| / T, tức 0.80 ở T=250 và
+1.33 ở T=150, nên 0.8 vẫn hợp lệ và còn dư biên. Nhưng áp lực chống lì giảm.
+Nếu `outcome/timeout` TĂNG thay vì giảm thì đây là nguyên nhân, và cách sửa là
+nâng step_penalty về 1.33 chứ không phải trả T về 250.
+
+    KIỂM CHỨNG TRƯỚC KHI TRAIN (sau khi build lại plugin và khởi động lại
+    Gazebo - .so cũ còn nằm trong gzserver đang chạy):
+
+        python3 ~/rl_view/check_talking_offset.py
+
+    Phải in `DAT`, |lệch| gọn trong [0.4, 1.4] và có cả hai bên trái/phải.
+
+    TIÊU CHÍ ĐỌC TENSORBOARD: `social/mean_peak_intrusion` phải ĐI XUỐNG theo
+    thời gian, không phải dao động phẳng như run trước. `outcome/goal` không
+    được tụt dưới 90% - tụt là policy đã học thành "sợ người", đúng bẫy đã giết
+    run 20260827_013703.
+
+HƯỚNG MESH CỦA NGƯỜI ĐI BỘ LỆCH 90 ĐỘ (28-08-2026). SetWorldPose cho walker
+trước đây truyền thẳng `yaw` với lý lẽ ghi trong comment là "mesh yaw của actor
+này vốn đã là hướng đi" - SAI, nó suy từ trường hợp đứng sang trường hợp đi mà
+không đo lại. Đã thêm `+ kStandingMeshYawOffset`.
+
+Offset KHÔNG nằm trong animation: đọc keyframe Hips đầu tiên của cả ba .dae
+đang dùng thì yaw nướng sẵn đều ~0 (m_doctor/walk -1.45 deg, m_doctor/talk
+-0.21 deg, m_mechanic/talk +0.22 deg). Cùng phép đọc đó tái tạo đúng
+root_roll 1.205901 so với 1.206206 và z 0.886947 so với 0.886948 trong file
+này, nên số tin được. Offset đến từ TƯ THẾ GỐC của nhân vật, thứ mà talk.dae và
+walk.dae của cùng một model dùng chung.
+
+DẤU ĐÃ XÁC NHẬN BẰNG MẮT trong Gazebo 28-08-2026: người đi đúng theo hướng mặt.
+Phép này BẮT BUỘC phải có người nhìn - `+pi/2` và `-pi/2` đều là "lệch 90 độ",
+không phép đo nào ở đây phân biệt được hai cái.
+
+DỮ LIỆU VỐN ĐÃ ĐÚNG, CHỈ HIỂN THỊ SAI. `facing` publish ra khớp atan2(vy, vx)
+với sai lệch +0.0 deg trên 84 mẫu TRƯỚC khi sửa, và -0.0 deg trên 83 mẫu SAU
+khi sửa. Dòng publish ground truth cố ý KHÔNG cộng offset - `facing` là hướng
+người nhìn, mesh yaw chỉ là hệ quả cách asset được dựng. Đừng "sửa cho khớp".
+
+ĐANG TRAIN BA CASE (28-08-2026): env.scenarios = [crossing, talking,
+approaching]. `backs_turned` và `none` tạm bỏ, train sau. Bỏ `none` nghĩa là
+policy không còn tập nào KHÔNG CÓ AI - xem cảnh báo ngay trên.
+
+TỐC ĐỘ crossing HẠ TỪ 0.6-1.1 XUỐNG 0.40-0.75 m/s (28-08-2026). Số học trên
+tuyến mặc định: tuyến dài 4.79 m, robot 0.5 m/s đi hết 9.58 s, nên nó tới chỗ
+cắt (đặt ở 35-75% tuyến) lúc t = 3.35-7.18 s. Người xuất phát cách 2.5-3.5 m
+phải đi trung bình reach/t mới có mặt đúng lúc:
+
+    cắt ở 35%   robot tới lúc 3.35 s   cần 0.75-1.04 m/s
+    cắt ở 55%   robot tới lúc 5.27 s   cần 0.47-0.66 m/s
+    cắt ở 75%   robot tới lúc 7.18 s   cần 0.35-0.49 m/s
+
+Dải cũ chỉ hợp với đầu tuyến; ở mọi chỗ khác người đã đi qua và khuất trước
+khi robot tới, tức tập `crossing` biến thành tập rỗng. Dải mới bám con số giữa
+tuyến. ĐO LẠI sau khi đổi, 21 người qua 16 lần thả: 0.424 - 0.747 m/s, trung vị
+0.650.
+
+Đổi tỉ lệ bằng cách lặp tên trong env.scenarios của rl_train.yaml.
+
+LƯU Ý KHI ĐỔI TỐC ĐỘ: sửa .cpp thì PHẢI colcon build VÀ khởi động lại gzserver.
+Plugin đã nạp nằm trong bộ nhớ tiến trình; đã đo nhầm một lần vì gzserver khởi
+động lúc 19:06 còn .so build lúc 19:15 - số ra vẫn là dải cũ y như chưa sửa.
+
+Thử tay một kịch bản (terminal 1 đang chạy):
+
+    ros2 topic pub -t 3 /animated_people/scenario std_msgs/msg/String \
+      "{data: 'crossing 42'}"
+    ros2 topic echo /social_gt/people --once
+
+DÙNG `-t 3`, ĐỪNG DÙNG `--once`. `ros2 topic pub --once` thoát ngay sau khi gọi
+publish(), và DDS chưa kịp đẩy mẫu đi trước khi tiến trình bị tháo - kịch bản
+im lặng không tới nơi và cảnh vẫn trống. KHÔNG phải lỗi plugin: publish từ một
+node bền bỉ đúng 40/40 lần. Đo 28-08-2026 với subscriber bền bỉ đứng sẵn:
+
+    ros2 topic pub --once        4/6 lần tới nơi
+    ros2 topic pub -t 3          6/6
+    ros2 topic pub -t 3 -r 5     6/6
+
+`-w 1` KHÔNG cứu được (2/6). Ba lần publish thì lần cuối quyết định bố cục, nên
+`-t 3` không làm hỏng gì - trừ khi bạn đang truyền seed, lúc đó cả ba lần cùng
+seed nên vẫn ra đúng một bố cục.
+
+CÙNG CÁI BẪY ĐÓ TRONG SCRIPT TỰ VIẾT: tạo publisher xong phải spin ÍT NHẤT 2 s
+trước khi publish lần đầu. Script chỉ chờ 0.5-1.0 s làm mất tin nhắn im lặng,
+và tôi đã hai lần kết luận nhầm là "approaching không sinh người" vì chuyện này.
+Chờ 3 s thì 3/3 lần đều tới nơi.
+
+TUỔI THỌ NGƯỜI TRONG MỘT LẦN THẢ (đo 28-08-2026, đi một lượt rồi đỗ dưới sàn):
+
+    approaching   ~8 s    (+1.80, -0.12) -> (-2.94, -2.71) ở 0.70 m/s
+    crossing      ~17 s   (+1.12, -3.42) -> (-1.98, +2.23) ở 0.41 m/s
+
+approaching NGẮN HƠN NHIỀU và nó kết thúc ngay tại chỗ robot spawn (-3, -2).
+Thả xong mà nhìn chỗ khác là lỡ.
+
+Số 42 là seed, để lặp lại đúng một bố cục khi đang truy một tập chạy tồi. Bỏ
+seed thì mỗi lần một khác. "none" dọn sạch người.
+
+ACTOR CÓ SẴN TRONG WORLD: m_sweater, m_mechanic (có cả talk.dae và walk.dae -
+dùng cho người đứng), walker_1/2/3 (chỉ walk.dae). walker_2 và walker_3 dùng
+CHUNG skin m_doctor với walker_1: hằng số root_roll 1.206206 và root height
+0.886948 trong plugin là keyframe Hips ĐẦU TIÊN của đúng file .dae đó, model
+khác thì actor lún sàn hoặc bay lên. Train bằng ground-truth nên ba người giống
+hệt nhau chẳng tốn gì; đổi skin khi nào làm khối C, và đo lại offset lúc đó.
+
+-------------------------------------------------------------------------------
+ HÀM THƯỞNG
+-------------------------------------------------------------------------------
+
+12-09-2026: BẢNG DƯỚI ĐÂY ĐÃ LỖI THỜI VỀ CON SỐ (còn -200/-8.0/+40/-0.8 từ
+trước hai lần chia tỉ lệ 11 và 12-09, và social_penalty gộp MAX một số hạng đã
+bị thay bằng 3 số hạng tách theo scene_type theo báo cáo "Công thức Gauss").
+Xem `rl_train.yaml` mục `reward:` để có số + lịch sử đầy đủ, và
+`reward.py`/`RewardConfig` để có công thức. Tóm tắt hiện tại (12-09-2026):
+
+    tới đích                    +10.0, kết thúc tập
+    va vật cản (<= 0.30 m)      -10.0, kết thúc tập
+    đứng trong C_talk (talking) -lambda_s * w_talk  * C_talk   (3.0 * 1.0 = -2.7 tại đỉnh)
+    đứng trong C_view (waiting) -lambda_s * w_view  * C_view   (3.0 * 0.8 = -1.68 tại đỉnh)
+    đứng trong C_cross (khác)   -lambda_s * w_cross * C_cross  (3.0 * 0.6 = -0.9 tại đỉnh)
+    tiến về đích                +2.0 mỗi mét
+    quay đầu về đích            +0.25 mỗi radian |bearing| co lại
+    mỗi step                    -0.04
+
+CÔNG THỨC ĐẦY ĐỦ  (social_rl/social_rl/reward.py, evaluate_step). Xét THEO
+ĐÚNG THỨ TỰ này và THOÁT SỚM, không cộng dồn:
+
+    1. minimum_scan <= 0.30 m   ->  r = -10.0, kết thúc tập, 'hit_obstacle'
+    2. d_goal       <= 0.35 m   ->  r = +10.0, kết thúc tập, 'goal'
+    3. còn lại:
+
+        r_t = 2.0 * (d_{t-1} - d_t)                    progress
+            + 0.25 * (|bearing_{t-1}| - |bearing_t|)    quay đầu về đích
+            - 0.04                                      step_penalty
+            - 3.0*(1.0*C_talk + 0.8*C_view + 0.6*C_cross)  social
+
+    d_t       khoảng cách Euclid robot -> goal tại step t, mét
+    bearing_t góc từ hướng robot tới goal tại step t, radian
+    C_talk/C_view/C_cross  giá trị Gaussian (đã nhân weight riêng zone: 0.9/
+              0.7/0.5) tại ĐÚNG vị trí robot, tách theo scene_type qua
+              constraint_field.intrusion_by_type() trên danh sách người ĐẦY
+              ĐỦ (không nón camera, không che khuất). 'cross' gộp cả
+              passing/walking/không rõ/backs_turned - không ai thoát phạt.
+
+Va vật cản xét TRƯỚC tới đích: tới nơi mà cùng step đó quệt chân bàn thì tính
+là quệt. Bốn đích trong rl_train.yaml đều cách chân bàn >= 1.07 m nên không có
+đích nào chỉ tới được bằng cách đi vào bán kính va chạm trước.
+
+KHÔNG có luật va người trong đây. Đi xuyên qua một người tính tiền HOÀN TOÀN
+bằng số hạng social. Luật vật cản cũng không bắn vào người được, vì /scan xuyên
+qua actor - collision proxy trong lirs_test.world đang bị comment. Bỏ comment
+chúng ra thì va người quay lại, dưới cái tên hit_obstacle.
+
+I_t TÍNH THẾ NÀO  (constraint_field.intrusion_at_robot):
+
+    I_t = max trên mọi zone z của  mu_z  tại gốc base_link,  CHỈ Ở t = 0.0
+
+mu là giá trị một vùng, công thức ở mục KHỐI D bên trên. Ba chi tiết đừng đổi:
+
+  - MAX, không phải tổng. Đứng chỗ hai vùng chồng nhau thì trả đúng giá của
+    vùng nặng hơn, nên tiền phạt có chặn trên bất kể đông bao nhiêu người, và
+    policy train cạnh hai người không hoảng khi gặp bốn.
+  - CHỈ t = 0.0. Bốn kênh dự báo là thứ policy NHÌN, không phải thứ nó bị thu
+    tiền: phạt cho chỗ robot ĐANG đứng, không phạt cho chỗ người ta SẼ tới. Vì
+    ở t = 0.0 nên trong tiền phạt uncertainty_growth = 0 và không có ngoại suy.
+  - Lấy giá trị tại ĐÚNG toạ độ robot, không đọc lại từ lưới đã raster: ở
+    0.2 m một ô thì tâm robot rơi vào góc bốn ô, không ô nào giữ đúng giá trị
+    của nó.
+
+THAY ĐỔI 28-08-2026: dốc phạt theo KHOẢNG CÁCH (0 ở 1.2 m, -8.0 ở 0.20 m) đã
+được thay bằng độ sâu trong TRƯỜNG RÀNG BUỘC. Lý do: dốc cũ chỉ đo khoảng cách
+Euclid nên nó tính tiền NHƯ NHAU cho việc chen giữa hai người đang nói chuyện
+và việc đi ngang sau lưng một người ở cùng cự ly. Tức là mọi scene_type trong
+observation đều thành đồ trang trí mà policy không có lý do gì phải đọc.
+
+Thứ policy NHÌN THẤY và thứ policy BỊ PHẠT vẫn ra từ cùng phép dựng K_soc và
+intrusion_at_zones(), nên `scene_type` giữ nguyên ý nghĩa. Nhưng từ 01-09-2026
+hai DANH SÁCH cố ý khác nhau: observation dùng người đã qua nón/che khuất/bộ
+nhớ; reward dùng toàn bộ ground truth. Đây là thay đổi B để quay lưng không còn
+xoá được tiền phạt. Không thay phép K_soc bằng khoảng cách Euclid.
+
+Thay đổi này KHÔNG đổi observation shape nên checkpoint cũ nạp/--resume được.
+Nhưng policy cũ chưa học dưới reward đầy đủ và critic sẽ thấy phân phối return
+mới; phải train tiếp rồi chọn checkpoint mới bằng --eval, không chỉ eval model cũ.
+
+ĐIỂM HOÀ VỐN - con số đáng nhớ nhất, giữ nguyên so với bản cũ:
+chạy hết tốc độ, một step 0.2 s đi được 0.1 m, được +4.0 progress trừ -0.8 step
+penalty = +3.2. Đi xuyên giữa vùng thì -8.0, tức -4.8 mỗi step. Vẫn lỗ, đủ để
+đi vòng có lợi hơn, nhưng CÓ CHẶN TRÊN - không cắt tập và cuốn theo mọi điểm
+tập đó còn có thể kiếm được.
+
+ĐÃ BỎ (27-08-2026) LUẬT "VA NGƯỜI -> -200, KẾT THÚC TẬP". Nó biến mọi lần thử
+men ra sau lưng người thành vách vực: một bước sai mất 200 cộng toàn bộ phần
+còn lại của tập. Run 20260827_013703 học được đường vòng ở giờ 2-5 (tới đích 8
+lần, người gần nhất 1.15-2.19 m) rồi ĐÁNH MẤT - 150 tập cuối timeout 100%,
+đứng quay tại chỗ với đích cách 4 m.
+
+ĐÃ BỎ angular_penalty và smoothness_penalty. Cả hai thu phí trên đúng động tác
+cần dạy: đi vòng qua người BẮT BUỘC phải xoay. Muốn lệnh mượt hơn thì hạ
+max_angular_speed, đừng phạt việc xoay.
+
+ĐỪNG đẩy step_penalty quá 0.8 mà không hạ obstacle_collision_penalty tương ứng.
+Hễ đứng yên (250 * 0.8 = 200) đắt hơn đâm tường (200) thì lao vào tường gần
+nhất thành lối thoát rẻ, và policy sẽ tìm ra nó. Ở -0.5 nó đã tìm ra rồi.
+
+-------------------------------------------------------------------------------
+ BƯỚC THỜI GIAN CÓ KIỂM SOÁT  (env.pause_between_steps)
+-------------------------------------------------------------------------------
+
+Mỗi step: gửi lệnh -> unpause -> chờ đúng control_period thời gian MÔ PHỎNG ->
+pause -> mới đọc observation.
+
+VÌ SAO: không pause thì lúc PPO cập nhật mạng (vài giây thời gian thực) Gazebo
+vẫn chạy tiếp. Đo được: step đầu tiên sau lần cập nhật đầu tiên thấy /odom cũ
+1.302 s, và run chết.
+
+GIÁ PHẢI TRẢ, ĐÃ ĐO 28-08-2026, headless. ĐỌC KỸ HAI CỘT - chúng đo hai thứ
+khác nhau và rất dễ nhầm:
+
+                                    thu thập rollout    ĐẦU-CUỐI, kể cả
+                                    (512 step, chưa      lúc PPO cập nhật
+                                    tính cập nhật)       mạng
+    pause: false, trần 1.0          -                    ~4.2 step/s  (số cũ,
+                                                         đo trên 4900 step)
+    pause: true,  trần 1.0           3.65 step/s         -
+    pause: true,  gz physics -u 0    5.57 step/s          3.9 step/s
+                                                         (đo trên 1024 step)
+
+KẾT LUẬN THẲNG: TÍNH ĐẦU-CUỐI THÌ CHƯA NHANH HƠN BẢN CŨ. 3.9 so với 4.2 step/s.
+Phần physics nhanh lên 1.52 lần bị hai thứ ăn hết: 2 lần gọi service mỗi step
+(~13%), và thời gian PPO cập nhật mạng vốn không đổi. Thứ đổi lại được là TÍNH
+TẤT ĐỊNH - một step đúng bằng một chu kỳ điều khiển, và run này so sánh được
+với run sau.
+
+MUỐN NHANH NHẤT thì đặt pause_between_steps: false VÀ bỏ trần RTF, chấp nhận
+mất tính tất định. CHƯA ĐO tổ hợp này - đo trước khi tin.
+
+OVERSHOOT ĐO ĐƯỢC LÀ 0 ms. Log cuối mỗi tập in "worst step overshoot"; đọc số
+đó chứ đừng đoán. Nếu nó lên hàng chục ms thì control_period không còn nghĩa và
+phải xem lại.
+
+env.close() TỰ ĐỘNG unpause lại. Bỏ quên chuyện này thì gzserver đứng hình cho
+mọi thứ chạy sau đó, mà triệu chứng là "mọi topic im lặng, không lỗi ở đâu cả".
+
+-------------------------------------------------------------------------------
+ TĂNG TỐC MÔ PHỎNG
+-------------------------------------------------------------------------------
+
+lirs_test.world giờ khai báo <physics> tường minh (max_step_size 0.001,
+real_time_update_rate 1000 = đúng thời gian thực). Bỏ trần trên world ĐANG CHẠY,
+không cần khởi động lại:
+
+    gz physics -u 0
+
+ĐO 28-08-2026, headless, gui:=false. Cột step/s là TỐC ĐỘ THU THẬP ROLLOUT,
+chưa tính thời gian PPO cập nhật mạng - xem mục trên để biết số đầu-cuối:
+
+                                 /scan    /social_gt/people   step/s rollout
+    real_time_update_rate 1000    8.5 Hz       17.1 Hz            3.65
+    real_time_update_rate 0      14.6-18.9 Hz  33.4 Hz            5.57
+
+300k step tính theo tốc độ ĐẦU-CUỐI 3.9 step/s là khoảng 21 GIỜ.
+
+TIN QUAN TRỌNG: ở bản CŨ, bỏ trần làm camera tụt 8 Hz -> 5.72 Hz và /people trễ
+2.945 s (vượt xa people_timeout 1.0 s), nên train ở tốc độ đó chỉ dạy robot né
+bàn ghế. Với ground-truth thì CAMERA KHÔNG CÒN TRONG VÒNG LẶP -
+/social_gt/people được tính ngay trong vòng world-update nên không thể tụt lại
+sau nó. Đó là lý do lần này bỏ trần dùng được.
+
+CÒN NÚT THẮT Ở ĐÂU: gzserver ăn 232% CPU trên máy 12 nhân còn rảnh 60%. Nó bị
+giới hạn bởi chính vòng world-update của nó, không phải bởi tổng CPU. Thêm nhân
+không giúp gì.
+
+KHỐI D KHÔNG PHẢI NÚT THẮT - đã đo, đừng đi tối ưu nhầm chỗ:
+build_observation() + intrusion_at_robot() với 2 người tốn 3.36 ms mỗi step,
+tức 1.7% thời gian ở tần số điều khiển 5 Hz. Toàn bộ phần còn lại là gzserver.
+
+ĐÃ THỬ VÀ KHÔNG ĂN THUA: đặt always_on: false cho camera depth để Gazebo chỉ
+render khi có subscriber. Đo được 90 s so với 92 s cho 512 step - trong khoảng
+nhiễu. ĐÃ HOÀN NGUYÊN. Đừng thử lại.
+
+Chạy thử 5 000 step trước để kiểm tra đường ống, đừng train thẳng 300k:
+
+    ros2 launch social_rl rl_train.launch.py timesteps:=5000
+
+render:=true mở cửa sổ gzclient để nhìn robot học. Đổi lại bằng tốc độ:
+gzclient là thứ ngốn CPU nhất trong mô phỏng.
+
+-------------------------------------------------------------------------------
+ THEO DÕI TRAIN - CHỈ ĐỂ THEO DÕI/SHORTLIST, KHÔNG CHỌN CHECKPOINT
+-------------------------------------------------------------------------------
+
+    outcome/goal                  tỉ lệ tới đích. Phải tăng.
+    social/mean_peak_intrusion    peak trên danh sách policy thấy/nhớ. Phải GIẢM.
+    social/mean_peak_intrusion_unseen
+                                  peak trên danh sách đầy đủ, cũng là nguồn reward.
+                                  Phải GIẢM và bám sát dòng trên.
+    social/clear_episodes         tỉ lệ tập KHÔNG chạm vùng xã hội nào. Phải tăng.
+    scenario/<tên>_goal           tỉ lệ tới đích TÁCH RIÊNG theo từng kịch bản
+
+PHẢI NHÌN outcome/goal VÀ social/* CÙNG LÚC. Một policy tới đích 100% bằng cách
+lao thẳng qua giữa mọi cuộc trò chuyện sẽ có outcome/goal đẹp và
+social/mean_peak_intrusion = 1.0. Nhìn mỗi outcome/goal là chỉ đang đo phần
+điều hướng, không đo phần xã hội - tức là không đo thứ dự án này làm.
+
+Các đường TensorBoard là trung bình trượt của rollout có action stochastic, chỉ
+dùng biết lúc nào đáng đem checkpoint ra đo. Quyết định giữ checkpoint bắt buộc
+dùng `--eval` deterministic và block ACCEPTANCE; xem mục ĐO MỘT MODEL ĐÃ TRAIN.
+
+scenario/*_goal tách riêng vì policy thường học `crossing` trước rồi mới tới
+`talking`: gộp trung bình lại thì hai giai đoạn đó trông như một đường phẳng.
+
+BẪY HAY GẶP: ep_rew_mean tăng nhưng outcome/goal vẫn 0 và outcome/timeout = 1.
+Đó là policy học đứng im để chỉ chịu step_penalty. Xem lại mục ĐIỂM HOÀ VỐN.
+
+Log cuối mỗi tập in đủ để đọc bằng mắt:
+
+    episode ended: timeout after 250 steps (talking), return -834.8,
+    closest person 0.55 m, peak intrusion 1.00, worst step overshoot 0 ms
+
+`closest person -1.00 m` nghĩa là tập đó không có ai (kịch bản `none`), không
+phải lỗi.
+
+-------------------------------------------------------------------------------
+ DỪNG VÀ CHẠY TIẾP
+-------------------------------------------------------------------------------
+
+Ctrl+C ở terminal 2 KHÔNG mất hết: chương trình bắt KeyboardInterrupt và vẫn
+ghi final_model.zip. Chạy tiếp - CHỈ cần trỏ vào THƯ MỤC run:
+
+    ros2 launch social_rl rl_train.launch.py \
+        resume:=/home/son/social_rl_runs/<timestamp>
+
+Ba điều cần biết:
+
+  * KHÔNG ghi đè run cũ. Lần chạy tiếp tự mở thư mục run MỚI theo timestamp.
+    Muốn dồn vào một chỗ thì truyền thêm run_dir:=<đường dẫn cũ>.
+  * timesteps là SỐ STEP CHẠY THÊM, không phải mốc tổng.
+  * Nếu observation trong rl_train.yaml đã đổi so với lúc train checkpoint đó,
+    chương trình DỪNG NGAY và in ra khoá nào lệch, thay vì để torch báo lỗi
+    shape khó hiểu (hoặc tệ hơn: chạy tiếp với thang đo sai). So sánh dựa trên
+    <run_dir>/env_config.yaml đi kèm checkpoint.
+
+CHECKPOINT TRƯỚC 28-08-2026 KHÔNG DÙNG LẠI ĐƯỢC. Observation đổi từ 2 kênh sang
+5 kênh, mạng CNN đổi kích thước. Train lại từ đầu.
+
+-------------------------------------------------------------------------------
+ CHẠY THỬ POLICY ĐÃ TRAIN
+-------------------------------------------------------------------------------
+
+Giữ nguyên terminal 1, thay terminal 2:
+
+    ros2 launch social_rl rl_agent.launch.py \
+        model_path:=/home/son/social_rl_runs/<run>/final_model.zip rviz:=true
+
+Thả người bằng tay để xem policy phản ứng:
+
+    ros2 topic pub --once /animated_people/scenario std_msgs/msg/String \
+      "{data: 'talking'}"
+
+Gửi đích - CHÚ Ý frame_id phải là `odom` khi không chạy Nav2 (goal_frame trong
+env_config.yaml đi kèm model quyết định điều này):
+
+    ros2 topic pub -r 2 /rl_goal_pose geometry_msgs/msg/PoseStamped \
+      "{header: {frame_id: odom},
+        pose: {position: {x: 4.5, y: 2.0, z: 0.0},
+               orientation: {w: 1.0}}}"
+
+QUAN TRỌNG - MẶC ĐỊNH AGENT ĐỌC /people TỪ KHỐI B, kể cả khi model được train
+bằng ground truth; social_rl/ground_truth.py cố ý không được import ở đó vì nó
+đọc /model_states, thứ robot thật không có. Muốn thấy người trong sim ở chế độ
+này thì phải chạy thêm:
+
+    ros2 launch social_rl rl_perception.launch.py
+
+CHƯA CÓ KHỐI C THÌ DÙNG people:=ground_truth ĐỂ TEST POLICY  (01-09-2026)
+
+    ros2 launch social_rl rl_agent.launch.py \
+        model_path:=~/social_rl_runs/<run>/final_model.zip \
+        people:=ground_truth
+
+Agent đọc /social_gt/people thay cho /people. KHÔNG phải nguồn người thứ hai:
+cùng kiểu message, cùng subscription, cùng bộ lọc nón camera + che khuất + bộ
+nhớ người trong bridge - chỉ đổi tên topic, và ground_truth.py vẫn nằm ngoài
+agent nên node vẫn chạy được trên robot thật y như cũ.
+
+CHỈ CHẠY ĐƯỢC TRONG SIM, và cần đúng một cạnh TF. /social_gt/people đóng dấu ở
+frame `world`; gazebo.launch.py đã có world -> map theo spawn pose, EKF có
+odom -> base_footprint, còn map -> odom thì launch file tự publish identity khi
+people:=ground_truth. Identity là đúng thứ lúc train giả định
+(env.reseed_localization đặt lại pose EKF về pose map mỗi tập), và cũng là lý do
+KHÔNG dùng AMCL cho cạnh này - hiệu chỉnh của AMCL sẽ làm người giật theo kiểu
+trainer chưa từng thấy. Đừng dùng chung với localization:=true; launch file đã
+chặn, hai publisher trên một cạnh là đánh nhau chứ không phải dự phòng.
+
+ĐO ĐƯỢC 01-09-2026, cùng một kịch bản `talking`, cùng một checkpoint:
+
+    nguon /people (khoi B, khong co khoi C)   nguon /social_gt/people
+    239 zone, scene_type '' HET               221 zone, scene_type 'talking' HET
+    0 zone nhom z_g                           55 zone nhom z_g
+    toi da 2 zone/message                     toi da 3 (2 ca nhan + 1 nhom)
+    track_id person_1, person_2               track_id m_sweater, m_mechanic
+
+Phân bố zone ở chế độ ground truth là {0: 51, 1: 56, 3: 55} - không có message
+nào 2 zone, vì hễ thấy đủ cả hai người là thành nhóm. 51 message 0 zone là nón
+camera vẫn lọc bình thường, không phải nhìn xuyên tường.
+
+DÙNG NÓ ĐỂ TÁCH HAI CÂU HỎI ĐANG LẪN NHAU: "policy có dở không" và "khối B/C có
+dở không". Số đo ở chế độ này KHÔNG nói gì về robot thật - node in một dòng WARN
+mỗi lần khởi động để nhắc đúng chuyện đó.
+
+11-09-2026: plugin diff_drive trong sim giờ nghe thẳng /cmd_vel (bỏ remap
+cmd_vel:=cmd_vel_safe trong diff_drive.urdf.xacro), và rl_agent.yaml/rl_train.yaml
+đều ghi vào /cmd_vel. social_velocity_filter không còn ảnh hưởng gì tới việc
+robot có chạy hay không nữa - social_safety:=true/false không còn quan trọng
+cho RL, dù chạy filter hay không robot vẫn nhận đúng lệnh policy chọn.
+
+-------------------------------------------------------------------------------
+ BẪY (LỊCH SỬ, ĐÃ HẾT HIỆU LỰC 11-09-2026): CHẠY rl_agent RỒI TẮT
+-------------------------------------------------------------------------------
+
+KHÔNG CÒN XẢY RA ĐƯỢC NỮA: từ 11-09-2026, diff_drive nghe thẳng /cmd_vel,
+social_velocity_filter không còn nằm giữa policy và bánh xe trong sim (xem
+đoạn ngay trên). Giữ nguyên phần dưới làm hồ sơ đo đạc gốc của một lớp lỗi
+đã từng có, KHÔNG phải hướng dẫn còn áp dụng - đừng chạy các lệnh
+`social_safety:=false` bên dưới với kỳ vọng chúng còn cần thiết.
+
+TRIỆU CHỨNG (khi bẫy còn tồn tại): tập nào cũng timeout, robot bò rất chậm,
+quay không ăn, KHÔNG có lỗi nào ở phía trainer. Nhìn như "policy tự dưng dở đi".
+
+    lenh policy chon : v = 0.500 m/s, w = +0.8 rad/s, suot 150 buoc
+    thuc te          : di duoc 1.03 m trong 30 s, bearing dung yen +22 do
+
+NGUYÊN NHÂN: `social_velocity_filter` bơm Twist RỖNG 9.8 Hz vào chính
+`/cmd_vel_safe`, topic mà trainer ghi lệnh ở 5 Hz. Cứ 3 lệnh thì 2 bị đè bằng 0.
+
+`command_watchdog` (social_velocity_filter.py:286) thoát sớm khi
+`command_received_at is None`, nên filter IM LẶNG nếu chưa từng nhận lệnh nào.
+Chạy `rl_agent` một lần là nó nhận được `/cmd_vel`; tắt agent đi thì watchdog
+kích hoạt và phát số 0 mãi mãi trong phần đời còn lại của phiên Gazebo đó.
+
+    ros2 topic info /cmd_vel_safe     -> Publisher: social_velocity_filter
+    ros2 topic hz   /cmd_vel_safe     -> 9.8 Hz  (trainer chi ghi 5 Hz)
+    log filter                        -> "Velocity input timed out;
+                                          publishing zero velocity"
+
+CÁCH TRÁNH: train và eval thì tắt hẳn filter bằng argument đã có sẵn
+(gazebo.launch.py:132, mặc định true):
+
+    ros2 launch linorobot2_gazebo gazebo.launch.py gui:=false social_safety:=false
+
+Đúng với chủ ý sẵn có: trainer cố ý ghi thẳng `/cmd_vel_safe` để bỏ qua filter,
+vì để filter ở giữa thì lệnh thực thi khác lệnh policy chọn và nó học nhầm
+quyết định của người khác. Từ 11-09-2026, `rl_agent` trong sim cũng ghi thẳng
+`/cmd_vel_safe` (rl_agent.yaml) nên KHÔNG còn trường hợp nào trong sim cần
+filter nữa - `social_safety:=false` luôn luôn, cả train lẫn agent. Filter
+(`social_safety.launch.py`) chỉ còn ý nghĩa khi chạy lại đường Nav2 cũ để so
+sánh, hoặc trên robot thật nếu sau này gắn nó làm khối F tạm.
+
+KIỂM TRA 5 GIÂY TRƯỚC MỖI LẦN TRAIN/EVAL:
+
+    ros2 topic hz /cmd_vel_safe    # truoc khi chay trainer: phai IM (khong co
+                                   # publisher nao dang ghi)
+
+ĐÃ BỊT GỐC 01-09-2026 - `stop_broadcast_time`. Watchdog vẫn phát lệnh 0 khi đầu
+vào chết (bánh xe phải dừng), nhưng CHỈ trong `stop_broadcast_time` giây rồi
+NGỪNG HẲN, thay vì phát mãi mãi. Bánh xe vẫn đứng yên sau đó vì lệnh cuối cùng
+chúng nhận được là 0.
+
+    social_navigation.yaml      stop_broadcast_time: 1.0   <- filter
+    social_safety_shield.yaml   stop_broadcast_time: 1.0   <- khối F
+
+ĐO ĐƯỢC, cùng một node, 10 lệnh ở 5 Hz rồi ngắt, cửa sổ quan sát 6 s:
+
+    filter cu (mo phong bang 1e9)  59 message 0, van phat o giay thu 6
+    filter da sua (1.0 s)          10 message 0, message cuoi o 1.07 s roi im
+    khoi F cu                      20.3 Hz NGAY TU LUC KHOI DONG, chua ai lai
+    khoi F da sua                  0 message khi chua ai lai; sau khi ngat,
+                                   20 message 0, message cuoi o 1.15 s
+
+Chuyển tiếp lúc đang lái không đổi: 10 lệnh vào 0.400/0.300 -> 10 lệnh ra
+0.400/0.300, nguyên vẹn.
+
+KÉO THEO: `Publisher count` khác 0 trên `/cmd_vel_safe` KHÔNG còn là án tử -
+một filter đang sống nhưng không có đầu vào thì im lặng. Dùng `ros2 topic hz`
+(có ai đang GHI không) thay cho `topic info` (có ai đang MỞ không).
+
+(11-09-2026: đoạn "VẪN GIỮ social_safety:=false CHO TRAIN/EVAL" từng ở đây đã
+bỏ - không còn ý nghĩa để giữ hay tắt cờ này cho RL nữa, filter không còn nằm
+giữa policy và bánh xe trong sim dù bật hay tắt. Xem đầu mục KHỐI C GIẢ LẬP ở
+trên và đoạn ngay sau đề mục BẪY này.)
+
+-------------------------------------------------------------------------------
+ N1 - ĐÍCH BỐC TỪ VÙNG TRỐNG CỦA MAP, KHÔNG CÒN 16 TUYẾN  (01-09-2026)
+-------------------------------------------------------------------------------
+
+    env.free_space_map: linorobot2_navigation/maps/cafe_vlm.yaml
+    env.maximum_goal_distance: 8.0        <- minimum_goal_distance 2.0 giữ nguyên
+
+Đặt tên map thì CẢ start LẪN goal được bốc từ vùng trống của chính map đó, và
+`start_poses` / `goals` KHÔNG còn được dùng. Bỏ trống khoá này là quay lại đúng
+hành vi của mọi run trước 01-09-2026 - hai danh sách vẫn nằm trong YAML.
+
+VÌ SAO: 4 start x 4 goal = 16 tuyến là TOÀN BỘ những gì policy từng thấy - dài
+3.18-5.80 m, bearing lúc reset -30 đến +57 độ, |bearing| > 90 độ xuất hiện
+0/16 lần. Đích bấm trên RViz không thuộc phân phối đó, và đấy là vấn đề số 1
+bạn báo: "chỉ định trên map đi quá xa thì robot khó đi được".
+
+HAI NGƯỠNG NỚI KHÁC NHAU, ĐỪNG GỘP LÀM MỘT:
+
+    dung duoc  0.45 m = obstacle_collision_distance 0.30 + le 0.15  -> 141.4 m2
+    nham duoc  0.70 m = 0.30 + reward.goal_distance 0.35 + le 0.05  -> 125.4 m2
+
+Ngưỡng thứ hai KHÔNG phải lề an toàn thừa. Tập kết thúc ngay khi robot vào
+trong `reward.goal_distance` của đích, nên đích đặt sát tường là tập chấm
+`hit_obstacle` ĐÚNG chỗ lẽ ra phải chấm `goal`. Đây chính là điều kiện 0.65 m
+mà ghi chú `goals` cũ đã viết tay cho từng đích, giờ tính bằng công thức.
+
+Chỉ ô ghi 254 (free) mới được lấy. Ô 205 (unknown) LỌT qua ngưỡng trinary của
+map_server thành "free" nhưng nó là phần ngoài phòng chưa quét: map này có
+9615 ô như thế cạnh 68249 ô trống thật.
+
+ĐO 4000 lượt bốc:
+
+    khoang cach   2.00 .. 8.00 m   moi bin 1 m chiem 14.2-18.8%
+    feature goal_distance/10       0.20 .. 0.80   (truoc: 0.32-0.58)
+    bearing       4 goc phan tu 23.4/24.8/25.8/26.1%
+    |bearing| > 90 do              49.4%          (truoc: 0%)
+
+Kiểm nới độc lập bằng distance transform: ô start gần vật cản nhất 0.500 m
+(ngưỡng 0.45, 0 vi phạm), ô goal 0.750 m (ngưỡng 0.70, 0 vi phạm).
+
+NGƯỜI VẪN ĐƯỢC ĐẶT ĐÚNG CHỖ: plugin đặt người theo tuyến của tập, và tuyến giờ
+chạy khắp map. Đo 187 vị trí người rời rạc trên 8 tập: 187/187 nằm trong vùng
+trống, không ai bị đẻ vào trong tường.
+
+CHECKPOINT CŨ VẪN --resume ĐƯỢC: đây là khoá trong `env:`, mà
+check_resume_layout chỉ so khối `observation:`.
+
+BỎ TRẦN 8 m, BỐC KHẮP MAP (01-09-2026, cùng ngày, sau khi đo topology):
+
+    env.maximum_goal_distance: 8.0 -> 20.0
+    env.max_episode_steps:     150 -> 250
+
+ĐO TOPOLOGY CỦA MAP TRƯỚC KHI NỚI - Dijkstra 8-hướng trên chính lưới đã nới
+0.45 m, 6000 cặp (start, goal) ngẫu nhiên:
+
+    chim bay    duong THAT   ti le vong   phai vong >20%
+     2- 4 m       3.25 m       x1.06          0.3%
+     4- 6 m       5.31 m       x1.06          0.6%
+     6- 8 m       7.37 m       x1.06          0.3%
+     8-12 m      10.37 m       x1.06          0.2%
+    12-25 m      15.12 m       x1.06          0.0%
+
+    toan bo: phai vong >20% duong = 0.3%; >50% = 0.0%
+    duong THAT dai nhat 22.5 m (chim bay 20.8 m)
+    lien thong: 1 manh duy nhat, 56565/56565 o - khong cua nao bi noi bit kin
+
+KẾT LUẬN QUAN TRỌNG, TRÁI VỚI THỨ TÔI ĐOÁN TRƯỚC ĐÓ: `cafe_vlm` là một KHÔNG
+GIAN MỞ. Không có bức tường nào bắt robot phải vòng ra ngoài cửa sổ 6.4 m của
+nó. Nghĩa là N2 - "phải có global plan mới đi được đích xa" - GẦN NHƯ KHÔNG
+TỒN TẠI TRÊN MAP NÀY, và A* (hướng A) mua được rất ít ở đây. Thất bại ở đích xa
+là chuyện LÁI (train chữa được), không phải chuyện HOẠCH ĐỊNH.
+
+ĐỪNG mang kết luận này sang map khác. Trên map có hành lang và cửa thật thì
+x1.06 sẽ không còn đúng, và lúc đó A* mới là thứ phải làm.
+
+HAI CON SỐ KHOÁ VỚI NHAU, ĐỔI MỘT PHẢI ĐỔI CẢ HAI:
+
+    toc do do duoc          11-12 buoc / met
+    150 buoc  = ~12.5 m     <- tran cu: dich 20 m la timeout CHAC CHAN
+    250 buoc  = ~20.8 m     <- vua du duong dai nhat cua map
+    250 buoc  = tran cua step_penalty: -0.8 x 250 = -200 = dung
+                obstacle_collision_penalty. Qua 250 ma khong ha step_penalty
+                thi dung yen dat hon dam tuong.
+
+PHÂN PHỐI SAU KHI NỚI (5000 lượt bốc):
+
+    khoang cach  2.0 .. 19.9 m, trung vi 6.7
+      2-4m 19.4%   4-6m 22.7%   6-8m 20.1%
+      8-12m 25.0%  12-16m 11.1%  16-21m 1.7%
+    bearing 4 goc phan tu  24.6 / 25.1 / 24.8 / 25.5%
+    |bearing| > 90 do      50.1%
+
+GIỚI HẠN CÒN LẠI, CỐ Ý KHÔNG SỬA: observation.goal_max_distance vẫn 10.0, nên
+feature khoảng cách BÃO HOÀ ở 1.0 với mọi đích từ 10 m trở lên - policy không
+phân biệt được 12 m với 19 m (khoảng 13% số tập). Nó vẫn biết HƯỚNG, và khi đi
+tới dưới 10 m thì feature có nghĩa trở lại. Nâng khoá đó lên là ĐỔI MỤC
+`observation:` => check_resume_layout chặn --resume và mọi checkpoint cũ thành
+vô dụng, đổi lại chỉ để phân biệt hai con số mà hành động đúng là như nhau.
+
+ĐÃ THỬ THÊM VẬT CẢN TĨNH RỒI GỠ ĐI (01-09-2026) - ĐỌC TRƯỚC KHI LÀM LẠI
+
+Ba vật cản (2 hộp + 1 trụ) đã được thêm vào `lirs_test.world`, tô vào map, đo
+đạc đầy đủ, rồi GỠ HẾT theo yêu cầu: train trên map gốc không vật cản. World
+và `cafe_vlm.pgm` đều đã hoàn nguyên (`git checkout`). Bản quét
+`maps/map_train_rl.*` còn nằm đó nhưng KHÔNG được dùng.
+
+Số đo giữ lại, để lần sau khỏi làm lại từ đầu:
+
+    3 vat can trong sanh 9.2 x 21.4 m:
+      dung duoc 141.4 -> 133.0 m2 ; nham duoc 125.4 -> 111.2 m2
+      ti le vong Dijkstra x1.060 -> x1.064 (van la khong gian mo)
+      25-32% so tap co vat can nam tren duong di thang, tuy vi tri dat
+
+    Tuc la 3 vat can du de gap thuong xuyen ma KHONG bien phong thanh me cung.
+
+HAI CÁI BẪY ĐÃ TRẢ GIÁ ĐỂ BIẾT, VẪN ĐÚNG CHO LẦN SAU:
+
+  1. WORLD VÀ MAP LÀ MỘT CẶP. `cafe_vlm.pgm` là thứ trainer bốc start/goal từ
+     đó. Thêm vật cản vào world mà quên map = trainer teleport robot vào GIỮA
+     cái hộp, tập chấm hit_obstacle ngay bước 0, không lỗi nào in ra.
+
+  2. BẢN ĐỒ SLAM CÓ VẬT CẢN RUỘT RỖNG. Lidar chỉ quét được VỎ nên tâm mỗi vật
+     đọc ra "trống" (đo được 0.25-0.35 m tới ô bị chiếm gần nhất). Phép nới
+     0.45 m đóng kín ruột CHỈ KHI vật mỏng hơn 0.90 m. Vật to hơn thì phải
+     kiểm thẳng: đếm số ô start/goal rơi vào trong footprint, phải bằng 0.
+
+     Hệ quả kèm theo: `ban_cafe` chỉ hiện 9 ô trong bản quét vì mặt bàn ở
+     0.72 m còn lidar ở 0.195 m - map chỉ thấy cái chân r=0.05.
+
+  3. FILE MỚI TRONG `maps/` PHẢI BUILD MỚI VÀO `install/`:
+         colcon build --packages-select linorobot2_navigation --symlink-install
+
+Quy đổi `map = world + (3, 2)` đã đo lại độc lập trên một bản quét mới (dò
+offset lưới 2 cm, đỉnh ở 3.00 / 2.02) - hằng số này đúng, không phải phỏng đoán.
+
+-------------------------------------------------------------------------------
+
+POLICY CŨ TRÊN PHÂN PHỐI MỚI - ĐỪNG ĐỌC NHẦM THÀNH TỤT LÙI:
+
+    16 tuyen co dinh (40 tap)   ve dich 97.5%
+    bay gio          (16 tap)   ve dich 56.2%, hit_obstacle 37.5%
+
+Không phải policy dở đi - nó chưa từng thấy những tuyến này. Con số 56.2% là
+KHOẢNG CÁCH mà 16 tuyến cố định đang che đi, và nó là đường cơ sở để đo lần
+train tới. Tiêu chí của giai đoạn train: về đích > 70% với đích 6-8 m.
+
+-------------------------------------------------------------------------------
+ N3 - NỚI BỘ NHỚ NGƯỜI 2.0 -> 6.0 s: ĐẠT MỘT NỬA  (01-09-2026)
+-------------------------------------------------------------------------------
+
+Nghiệm thu trên CÙNG checkpoint 20260831_221949, KHÔNG train lại - đây là phép
+đo về observation, không phải về policy. Chỉ kịch bản `crossing` (bỏ ba loại
+kia khỏi env.scenarios) để không bị pha loãng, 20 tập mỗi bên:
+
+    bo nho nguoi          2.0 s      6.0 s
+    tinh tien phat        0.255      0.381
+    intrusion THAT        0.621      0.672
+    chenh TRUNG BINH     +0.366     +0.292     <- muc tieu <0.10: TRUOT
+    chenh TRUNG VI       +0.130     +0.005     <- tap dien hinh: DA BIT
+    ti le buoc bi giau     76.7%      48.4%
+    tap "sach gia"         9/20       7/20
+
+ĐỌC HAI DÒNG CHÊNH CÙNG NHAU. Trung vị về gần 0 nghĩa là với tập mà robot ĐÃ
+TỪNG nhìn thấy người, bộ nhớ bịt được lỗ hổng. Trung bình vẫn cao vì 7/20 tập
+chênh tới +1.000: người cắt ngang CHƯA BAO GIỜ lọt nón camera 86 độ trong cả
+tập. Bộ nhớ không bịa ra được thứ chưa từng quan sát.
+
+KHỚP VỚI PHÉP ĐO 01-09-2026 TRƯỚC ĐÓ: nón camera là TOÀN BỘ nguyên nhân, che
+khuất đóng góp 0. Muốn đóng nốt phần còn lại thì phải cho khối B thấy được
+người ngoài nón - tức bám người bằng lidar 360 độ - chứ không phải vặn thêm
+tham số bộ nhớ. Nới lên 8.0 s không giúp: 20.3% số lượt bỏ sót là người chưa
+từng lọt khung hình.
+
+GIÁ PHẢI TRẢ, MẪU NHỎ NÊN CHƯA KẾT LUẬN: cùng 20 tập crossing, 6.0 s cho
+18/20 về đích (1 hit_obstacle, 1 timeout) so với 20/20 của 2.0 s. Đúng hướng
+mà đánh đổi "vùng ma" đã dự báo: người đã đi khỏi vẫn để lại vùng tới 6 s.
+Trên bộ 40 tập đủ 4 kịch bản thì 6.0 s về đích 97.5% (39/40), không thấy sụt.
+
+BỘ 40 TẬP ĐỦ 4 KỊCH BẢN, bộ nhớ 6.0 s, cùng checkpoint:
+
+    outcome/goal 97.5%   peak_intrusion 0.331   clear_episodes 62.5%
+    approaching 0.554 (unseen 0.552) n=13    crossing 0.380 (0.528) n=8
+    talking     0.750 (0.839)        n=4     none     0.000        n=15
+
+ĐỪNG so thẳng bảng này với đường cơ sở bên dưới: kịch bản bốc NGẪU NHIÊN mỗi
+tập và eval KHÔNG có seed cố định, nên bộ này có 15 tập `none` (intrusion 0
+theo định nghĩa) so với 5 tập của đường cơ sở. Chênh lệch ở dòng tổng phần lớn
+là do thành phần mẫu. So theo TỪNG kịch bản, hoặc khoá `env.scenarios` lại như
+phép đo crossing ở trên.
+
+-------------------------------------------------------------------------------
+ ĐƯỜNG CƠ SỞ ĐẦU TIÊN ĐO ĐƯỢC TỬ TẾ - run 20260831_221949  (01-09-2026)
+-------------------------------------------------------------------------------
+
+    ros2 run social_rl train_rl --eval ~/social_rl_runs/20260831_221949 \
+        --eval-episodes 40
+
+people_source ground_truth, không nhiễu block C, deterministic, Gazebo chạy với
+social_safety:=false.
+
+    outcome/goal            95.0%  (38/40)
+    outcome/hit_obstacle     5.0%
+    outcome/timeout          0.0%
+    mean episode steps       54.0
+    social/peak_intrusion   0.592
+    social/peak_unseen      0.691
+    social/clear_episodes   22.5%
+    mean closest, TRUE       0.46 m
+
+    kich ban       ve dich   intrusion   (unseen)   n
+    approaching    100.0%      0.866      0.877     13
+    crossing        92.9%      0.457      0.734     14
+    none           100.0%      0.000      0.000      5
+    talking         87.5%      0.752      0.744      8
+
+ĐỌC: policy đã học ĐI, chưa học NÉ. Về đích 95% mà chen qua vùng xã hội ở hầu
+hết các tập - chỉ 22.5% tập không chạm vùng nào, và khoảng cách gần nhất TRUNG
+BÌNH tới một người thật là 0.46 m.
+
+`approaching` là ca tệ nhất (0.866) dù về đích 100%: người đi thẳng vào robot
+thì robot cứ thế đi tiếp. `talking` 0.752 - vẫn chen vào giữa cuộc trò chuyện.
+
+`crossing` cho thấy đúng lỗ hổng đo lường đã biết: charged 0.457 nhưng THẬT
+0.734, chênh +0.28. Người cắt ngang đi vào từ hông, ngoài nón camera 86 độ, nên
+reward không tính tiền - policy không học né `crossing` vì chưa bao giờ bị phạt
+vì `crossing`.
+
+SỐ TRÊN TENSORBOARD LÚC TRAIN ĐẸP HƠN SỰ THẬT. Cửa sổ cuối của run này báo
+`clear_episodes` 0.70 và `mean_peak_intrusion` 0.248; đo lại tử tế thì là 0.225
+và 0.592. Cửa sổ 20 tập lấy trên rollout CÓ NHIỄU hành động, mà nhiễu thỉnh
+thoảng đẩy robot đi vòng. Hành vi deterministic - thứ sẽ chạy trên robot - xâm
+phạm nhiều hơn. Đừng đọc tensorboard thay cho --eval.
+
+-------------------------------------------------------------------------------
+ BẪY: KHỐI B NHÂN BẢN NGƯỜI, CHỈ THẤY KHI CHẠY AGENT  (đo 01-09-2026)
+-------------------------------------------------------------------------------
+
+Policy train bằng ground truth thì mỗi người có MỘT id cố định suốt tập
+(`m_sweater`, `m_mechanic`). Chạy `rl_agent` với `/people` thật thì không.
+
+Đo 50 s, kịch bản `talking`, ĐÚNG HAI người trong world, robot đi ngang qua cặp:
+
+    truoc khi sua        sau khi sua
+    42 id rieng biet      2            <- so danh tinh cho 2 nguoi
+    18 id song 1 frame    0
+    86 cap "nguoi" <0.6m  0            <- mot nguoi bi tach lam 2-3
+    7 nguoi/message max   2
+    11 zone K_soc max     2
+    37.2% msg >=3 nguoi   0.0%
+
+HAI CƠ CHẾ, cả hai trong `social_vlm_perception.py`:
+
+  1. NMS của YOLO chỉ bỏ box chồng nhau IoU cao. Hai box trên cùng một người
+     sống sót, và `used_ids` cấm box thứ hai lấy id mà box thứ nhất vừa nhận
+     -> đúc id mới mỗi frame. Vòng coasting đã có phép thử trùng
+     (`duplicate_merge_distance`) nhưng chỉ áp cho track coasted, không áp cho
+     chính các detection. Đã áp đối xứng.
+
+  2. Một box lạ DUY NHẤT sinh ra một track, rồi track đó được coasted đủ
+     `tracking_timeout` = 6 s -> 49 message /people từ 1 frame, và bộ nhớ người
+     của social_rl giữ thêm vài giây nữa. Đã thêm `minimum_track_hits: 3`.
+
+ĐỪNG VẶN `yolo_confidence` ĐỂ CHỮA CHUYỆN NÀY. Hai bóng ma đo được có score
+0.87 và 0.53/0.31 - nằm hai bên mọi ngưỡng mà người thật cũng phải vượt. Bằng
+chứng là SỐ FRAME nhìn thấy, không phải điểm tự tin.
+
+Giá phải trả: 6.2% số box bị chặn (17/274), người vào khung được publish chậm
+2 frame (0.25 s ở 8 Hz), và người đã xác nhận rồi thì giữ nguyên số hit khi
+quay lại nên không trả giá lần hai.
+
+CÁCH ĐO LẠI, cần agent đang chạy VÌ `/social_rl/constraint_field` do rl_agent
+publish, và nó chỉ quan sát khi CÓ đích đang chạy (tới đích là ngừng):
+
+    ros2 topic echo /people > /tmp/p.yaml &
+    ros2 topic pub --once /rl_goal_pose geometry_msgs/msg/PoseStamped \
+      "{header: {frame_id: odom}, pose: {position: {x: 4.5, y: 2.0}}}"
+    # roi dem id rieng biet:
+    grep -oE "person_[0-9]+" /tmp/p.yaml | sort -u | wc -l
+
+Với 2 người trong 50 s, con số này phải là 2. Lên tới hàng chục là cơ chế 1
+hoặc 2 đã quay lại.
+
+GIỚI HẠN ĐÃ BIẾT, CỐ Ý KHÔNG SỬA: `scene_type` trên `/people` luôn RỖNG vì khối
+C không chạy, nên khối D cho mọi người thang (1.0, 1.0, 1.0) và KHÔNG BAO GIỜ
+dựng vùng nhóm o-space - đo được 1031/1031 zone `scene_type: ''`, 0 zone `z_g`.
+Đo trên một cặp đứng cách nhau 1.5 m, robot ở ngay giữa:
+
+    nhan tu ground truth (duong train)  intrusion 1.000, co zone z_g
+    nhan rong  (duong /people hom nay)  intrusion 0.455, khong co zone z_g
+
+Tức trường lúc chạy `rl_agent` là một hàm KHÁC trường lúc train. Đó là lý do
+policy "không né" khi test bằng tay, và nó là giới hạn chứ không phải lỗi.
+
+MUỐN TEST POLICY TRONG LÚC CHỜ KHỐI C thì dùng `people:=ground_truth`, xem mục
+"CHẠY THỬ POLICY ĐÃ TRAIN". Nó lấy đúng nhãn policy đã học chứ không đoán lại,
+nên đo được khối E một cách sạch sẽ - và nó chỉ chạy trong sim, đúng bản chất.
+
+ĐÃ VIẾT MỘT BẢN SUY NHÃN TỪ HÌNH HỌC TRONG KHỐI D RỒI GỠ ĐI (01-09-2026). Nó
+chạy đúng - suy được approaching/crossing/walking từ vận tốc, và talking từ hai
+người đứng yên gần nhau - nhưng bị bỏ vì lý do kiến trúc: nó là NGUỒN NHÃN THỨ
+BA, khác cả ground truth lẫn VLM, và khi khối C có thật nó vẫn âm thầm chạy mỗi
+lần VLM bỏ phiếu trắng, che mất đúng thứ cần đo. Việc phán đoán tình huống là
+của khối C. Đừng cài lại nó như một bản vá tạm.
+
+Thêm một lý do đo được: khối B KHÔNG có bộ ước lượng hướng nhìn, nên `facing`
+của người đứng yên là nhiễu vận tốc - đo trên cặp đứng yên, facing chỉ khác 0 ở
+60/226 và 13/148 message và trải khắp +-180 độ. Bất kỳ phép "hai người có nhìn
+nhau không" nào dựng trên `facing` của /people đều là tung đồng xu. Khối C phải
+trả lời câu đó, hoặc khối B phải có bộ ước lượng hướng nhìn trước đã.
+
+-------------------------------------------------------------------------------
+ CHẠY MỘT VÒNG TRAIN ĐẦY ĐỦ - LỆNH THEO TỪNG MỐC  (29-08-2026)
+-------------------------------------------------------------------------------
+
+MỘT run liên tục 0 -> 300k. Các mốc là lúc NHÌN, không phải lúc gõ lệnh mới.
+
+    0 ------ 50k ------ 100k ------ 150k ------ 300k
+             nhìn       nhìn        nhìn        tự dừng
+
+~4 step/s đầu-cuối => 14.400 bước/giờ. 300k ~ 21 giờ.
+Trung bình 218 bước/tập (đo 19 tập) => 300k ~ 1.380 tập lúc chưa train; số tập
+TĂNG khi policy giỏi lên vì tới đích sớm.
+
+--- KHỞI ĐỘNG (gõ một lần) ---------------------------------------------------
+
+  T1:  cd ~/social_ninorobot && source install/setup.bash
+       ros2 launch linorobot2_gazebo gazebo.launch.py gui:=false
+       ĐỢI: "Animated people factory plugin loaded"
+            "Successfully spawned entity [linorobot2]"
+
+  T2:  cd ~/social_ninorobot && source install/setup.bash
+       grep -E "^  vlm_noise:" social_rl/config/rl_train.yaml    # phải là false
+       timeout 8 ros2 topic hz /social_gt/people                 # ~17 Hz
+       timeout 8 ros2 topic hz /model_states                     # ~93 Hz
+       timeout 8 ros2 topic hz /scan                             # ~8.5 Hz
+       ros2 launch social_rl rl_train.launch.py
+
+  T3:  tensorboard --logdir ~/social_rl_runs
+
+  Ngay sau dòng "run dir", xác nhận trainer nạp đúng file vừa sửa:
+       grep -E "vlm_noise|people_memory_time" ~/social_rl_runs/<run>/env_config.yaml
+
+--- MỐC 50k (~3,5 h) và 100k (~7 h): CHỈ XEM ---------------------------------
+
+  T4:  bash ~/social_ninorobot/social_rl/tools/show_progress.sh
+
+  50k  goal > 0 HOẶC mean_peak_intrusion < 0.7   -> để chạy tiếp, không gõ gì
+       cả hai y như đầu run                      -> DỪNG, tìm lỗi
+  100k goal cao hơn 50k, hit_obstacle thấp hơn   -> để chạy tiếp
+
+--- MỐC 150k (~10,5 h): MỐC QUYẾT ĐỊNH ---------------------------------------
+
+  clear_episodes > 0 ổn định  -> chuyển sang nhiễu (dưới đây)
+  vẫn 0                       -> để chạy tới 300k rồi làm y hệt
+
+  1. Ctrl+C ở T2.  GIỮ NGUYÊN Gazebo ở T1.
+  2. ls -t ~/social_rl_runs | head -1
+  3. CHỐT SỐ NỀN - bước dễ quên nhất, không có nó thì không so được gì:
+       ros2 run social_rl train_rl --eval ~/social_rl_runs/<run_sach> \
+           --eval-episodes 20 | tee ~/eval_1_sach.txt
+  4. Sửa MỘT dòng, không build lại (YAML đi qua symlink):
+       vlm_noise: true
+  5. ros2 launch social_rl rl_train.launch.py \
+         resume:=~/social_rl_runs/<run_sach> timesteps:=100000
+  6. KIỂM CẢ HAI dấu hiệu nhiễu thật sự bật:
+       - dòng khởi động "simulated block C is ON: ..."
+       - mỗi dòng kết thúc tập có "N steps with a misread label", N > 0
+  7. Xong thì so hai bậc:
+       ros2 run social_rl train_rl --eval ~/social_rl_runs/<run_nhieu> \
+           --eval-episodes 20 | tee ~/eval_2_nhieu.txt
+       diff -y ~/eval_1_sach.txt ~/eval_2_nhieu.txt
+
+--- PHẢI TẮT GIỮA CHỪNG ------------------------------------------------------
+
+  ros2 launch social_rl rl_train.launch.py \
+      resume:=~/social_rl_runs/<run_dang_do> timesteps:=<SỐ BƯỚC CÒN LẠI>
+
+  timesteps: lúc resume là "train THÊM bấy nhiêu", KHÔNG phải tổng.
+  Đang ở 50k, muốn tới 100k -> timesteps:=50000.
+  Run cũ không bị ghi đè: train.py luôn tạo thư mục mới và ghi `resumed_from`.
+
+--- ĐỪNG HOẢNG ---------------------------------------------------------------
+
+  * Bật nhiễu xong các số TỆ ĐI là bình thường. Nhìn xem nó có HỒI PHỤC không.
+  * "N steps with a misread label" thấp hơn 30% không phải lỗi: bị chặn bởi tần
+    suất có ai đó trong tầm nhìn. Đo được 36/250 trên một tập `talking`.
+    Chỉ N = 0 SUỐT TẬP mới là nhiễu không chạy.
+  * Mọi chỉ số outcome/* và social/* là TRUNG BÌNH TRƯỢT 20 TẬP
+    (OutcomeCallback window=20), tức ~18 phút lúc đầu. Đừng kết luận từ 1 tập.
+
+-------------------------------------------------------------------------------
+ KHỐI C GIẢ LẬP - NHIỄU VLM LÚC TRAIN  (29-08-2026)
+-------------------------------------------------------------------------------
+
+    env.vlm_noise: false        <- MẶC ĐỊNH TẮT, CỐ Ý
+
+ground_truth.SimulatedVLM. Khối C chưa tồn tại, nhưng policy sẽ ăn output của
+nó thì đang được train NGAY BÂY GIỜ trên ground truth có scene_type luôn đúng
+và luôn tức thời. Train như thế rồi cắm VLM thật vào là cách phát hiện, đúng
+vào lúc tệ nhất, rằng policy đã học TIN TUYỆT ĐỐI vào nhãn.
+
+QUY TẮC TRUNG TÂM: NHÃN BỊ NHIỄU, TIỀN PHẠT THÌ KHÔNG.
+
+Từ thay đổi B ngày 01-09-2026, reward luôn dùng nhãn thật VÀ danh sách người đầy
+đủ. Observation vẫn dùng nhãn nhiễu trên danh sách đã lọc. Sự bất đối xứng này
+có chủ ý; đừng "sửa lại cho nhất quán".
+
+    nón camera / che khuất   robot không thấy người đó ở bước hiện tại
+                             -> reward vẫn chịu trách nhiệm theo ground truth
+                             -> LSTM nhớ người vừa thấy; chỗ mù thì đi chậm/giữ lề
+    nhiễu VLM                robot VẪN THẤY người: đúng chỗ, đúng vận tốc,
+                             chỉ đọc sai HOẠT ĐỘNG
+                             -> phạt theo SỰ THẬT
+
+Phạt theo nhãn sai là dạy policy rằng một cuộc nói chuyện bị đọc nhầm thành
+`walking` thì THẬT SỰ rẻ - tức dạy nó tin nhãn, đúng cái thói quen sẽ hại khi
+khối C vào. Phạt theo sự thật dạy điều ngược lại: NHÃN KHÔNG ĐÁNG TIN THÌ NỚI
+RỘNG KHOẢNG CÁCH. Học được, vì hình học quan sát được đầy đủ và chỉ nhãn là
+không - và LSTM chính là thứ mang sự nghi ngờ đó qua các bước.
+
+Nón camera, che khuất và bộ nhớ chỉ quyết định danh sách observation. Reward
+không qua ba bộ lọc đó. Đây chính là B: robot chịu trách nhiệm cả với người nó
+không nhìn thấy ở bước hiện tại, với nguyên trọng số K_soc.
+
+THAM SỐ:
+
+    vlm_period 0.5            nhịp ra phán quyết. Nhãn được GIỮ theo track giữa
+                              hai lần, nên MỘT tham số này sinh ra cả ĐỘ TRỄ
+                              lẫn NHẤP NHÁY. 0.5 s ~ VLM video 2 Hz.
+    vlm_wrong_label_prob 0.2  đọc nhầm sang nhãn khác (~VLM 4-5 lớp đúng 70-85%)
+    vlm_abstain_prob 0.1      trả '' -> khối D về weight nền (0.5)
+    vlm_facing_lost_prob      mất hẳn hướng nhìn. Tái hiện ĐÚNG khối B hiện
+                              nay: orientation 0 trong frame `map` cho người
+                              đứng yên, tức MỘT HƯỚNG LA BÀN CỐ ĐỊNH, không
+                              phải vùng đối xứng. Vùng xoay sai còn tệ hơn
+                              vùng không có.
+    vlm_facing_sigma          sai số góc, giữ nguyên suốt một phán quyết chứ
+                              không bốc lại mỗi bước.
+    vlm_seed 0                0 = ngẫu nhiên mỗi run; khác 0 để lặp lại.
+    vlm_confidence_min/max    (thêm 11-09-2026) scene_confidence bốc đều trong
+                              [min, max], CÙNG NHỊP vlm_period. rl_train.yaml
+                              đặt [0.7, 0.9]. Đây là đường DUY NHẤT khiến các
+                              vùng Gaussian POLICY NHÌN THẤY co giãn kích thước
+                              ngẫu nhiên lúc train: confidence chạy thẳng vào
+                              factor = 1 + expansion_a*(1-c) của
+                              constraint_field.py -- ở [0.7,0.9] factor dao
+                              động 1.05-1.15 (expansion_a mặc định 0.5). Ground
+                              truth dùng cho reward luôn confidence 1.0
+                              (relative_people()), nên hình học reward KHÔNG
+                              đổi - chỉ cái policy thấy đổi. CHỈ có tác dụng
+                              khi vlm_noise: true (đang false).
+
+CURRICULUM - ĐỪNG BẬT TỪ BƯỚC 0. Chính bẫy đã ghi ở đầu file: cho policy ăn
+nhiễu lúc còn chưa biết lái thì một tập tồi không phân biệt được là lỗi policy
+hay lỗi nhiễu.
+
+    1. train SẠCH tới khi policy biết lái và mean_peak_intrusion bắt đầu giảm
+    2. đặt vlm_noise: true rồi train tiếp bằng --resume. vlm_confidence_min/max
+       đã sẵn [0.7, 0.9] trong yaml, có tác dụng ngay khi bước này bật lên
+
+scene_type chỉ chọn hệ số nhân, KHÔNG đổi số kênh, nên shape mạng không đổi và
+checkpoint nạp lại được bình thường.
+
+KIỂM CHỨNG NÓ ĐANG CHẠY: node in một dòng lúc khởi động ("simulated block C is
+ON: ..."), và mỗi dòng kết thúc tập in "N steps with a misread label". N = 0
+suốt tập nghĩa là nhiễu KHÔNG chạy - đừng cho rằng im lặng là ổn.
+
+ĐO OFFLINE (16 phép thử, tất cả đúng): tỉ lệ nhãn qua 4000 phán quyết ra
+0.696/0.100/0.200 so với 0.7/0.1/0.2 đặt vào; phán quyết giữ nguyên trong 0.4 s
+rồi mới bốc lại ở 0.5 s; sự thật đổi giữa chu kỳ thì nhãn vẫn là cái cũ (độ trễ
+có thật); mất facing cho ra đúng -robot_yaw ở mọi hướng robot.
+
+PHÉP THỬ QUAN TRỌNG NHẤT - robot đứng giữa cặp `talking`, khối C đọc nhầm cả
+hai thành `walking`:
+
+    policy TIN nó đang ở trong vùng sâu   0.765
+    nhưng BỊ PHẠT theo sự thật            1.000
+
+TRÊN SIM THẬT, một tập `talking` 250 bước với vlm_noise: true:
+
+    36/250 bước có nhãn bị đọc sai
+    peak_intrusion 1.000 (tính trên NHÃN THẬT), overshoot 0 ms
+
+36/250 = 14%, thấp hơn 30% (wrong 0.2 + abstain 0.1) mà vẫn đúng: con số này bị
+chặn bởi tần suất có ai đó NẰM TRONG danh sách đã lọc. Không nhìn thấy ai thì
+không có nhãn nào để đọc sai.
+
+GIÁ PHẢI TRẢ: bật nhiễu thì mỗi bước có BA lần compile_zones (kênh quan sát,
+tiền phạt theo sự thật, chỉ số bóng) thay vì hai. ~10 ms/bước, ~5% ở 5 Hz. Đo
+được: worst step overshoot vẫn 0 ms.
+
+-------------------------------------------------------------------------------
+ ĐO MỘT MODEL ĐÃ TRAIN - CHẾ ĐỘ EVAL  (29-08-2026)
+-------------------------------------------------------------------------------
+
+    ros2 run social_rl train_rl \
+        --eval ~/social_rl_runs/<run>/checkpoints/recurrent_ppo_<step>_steps.zip \
+        --eval-episodes 40
+
+Nhận .zip hoặc thẳng thư mục run. ĐỂ CHỌN CHECKPOINT phải truyền đúng file .zip
+như lệnh trên: truyền thư mục run chỉ đo final_model.zip (hoặc checkpoint mới
+nhất khi không có final), KHÔNG tự tìm checkpoint tốt nhất. Chạy N tập, KHÔNG
+cập nhật mạng, KHÔNG ghi gì ra đĩa, rồi in bảng tổng kết. Thêm
+--eval-stochastic nếu muốn bốc mẫu; nghiệm thu luôn dùng mặc định deterministic,
+đúng như rl_agent.yaml chạy trên robot.
+
+VÌ SAO PHẢI CÓ. Trước đó KHÔNG có cách nào hỏi "POLICY có tốt không".
+agent_node.py cố ý không bao giờ đọc ground truth, nên test một checkpoint là
+test nó qua khối B - mà một con số tệ ở đó được giải thích ngang nhau bởi
+"policy dở" và "tracker mù".
+
+CÁI THANG BA BẬC - mỗi bậc cách nhau ĐÚNG MỘT DÒNG trong rl_train.yaml, và
+cùng một checkpoint:
+
+    ground_truth, không nhiễu giả lập  -> POLICY có tốt không
+    ground_truth + vlm_noise: true     -> chịu được khối C nhiễu tới đâu
+    people_source: perception          -> khối B thật lấy đi bao nhiêu
+
+Đọc BA đầu ra cạnh nhau. Một con số đơn lẻ không nói lên điều gì.
+
+Bảng in ra gồm: tỉ lệ goal/hit_obstacle/timeout, số bước và return trung bình,
+social/peak_intrusion cùng social/peak_unseen, clear_episodes, khoảng cách gần
+nhất theo cả hai cách đo, số bước có nhãn bị đọc sai (khi bật nhiễu), và tách
+theo từng kịch bản. Đầu bảng in lại cấu hình đang chạy để ba lần chạy tự dán
+nhãn cho chính nó.
+
+CHẶN SAI LAYOUT: --eval dùng cùng check_resume_layout với --resume. Đổi
+grid_size hay prediction_times rồi eval một checkpoint cũ thì nó báo lỗi NGAY,
+trước cả khi chạm vào Gazebo. --eval và --resume cùng lúc cũng bị từ chối.
+
+Ctrl+C giữa chừng vẫn in bảng cho số tập đã chạy xong.
+
+CẦN GAZEBO ĐANG CHẠY, như train. Không cần terminal trainer.
+
+TIÊU CHÍ NGHIỆM THU CHECKPOINT (01-09-2026) - phải đạt ĐỒNG THỜI:
+
+    peak_unseen - peak_intrusion < 0.10   <- né thật, không né khỏi khung hình
+    clear_episodes                > 60%
+    mean closest, TRUE            > 0.60 m
+    none goal                     > 90%    <- không đánh đổi mất khả năng đi
+
+`--eval` in block ACCEPTANCE với PASS/FAIL cho từng dòng và kết luận chung. Dấu
+so sánh là nghiêm ngặt: đúng 0.10, 60%, 0.60 m hoặc 90% vẫn FAIL. Nếu không bốc
+được tập `none`, hoặc không có khoảng cách ground-truth đầy đủ, dòng tương ứng
+là N/A/FAIL chứ không được mặc định là đạt.
+
+Ba dòng social đầu phải đọc cùng nhau. `_unseen` tách LÊN quá 0.10 là dấu hiệu
+đủ để kết luận policy đang né khỏi khung hình. Dòng `none` giữ cho việc né không
+được mua bằng cách đánh mất khả năng điều hướng.
+
+TensorBoard/show_progress.sh chỉ dùng theo dõi và shortlist vùng step. Chọn model
+bằng cách chạy lệnh trên cho từng file checkpoint ứng viên; giữ checkpoint chỉ
+khi block ACCEPTANCE báo PASS. Dùng ít nhất 40 tập như đường cơ sở để giảm nhiễu
+mẫu; ghi lại n của từng scenario vì eval hiện vẫn bốc kịch bản ngẫu nhiên.
+
+-------------------------------------------------------------------------------
+ GROUND TRUTH CHỈ TRONG TẦM CAMERA  (29-08-2026)
+-------------------------------------------------------------------------------
+
+    env.people_camera_only: true      <- MẶC ĐỊNH TỪ 29-08-2026
+
+Ground truth của Gazebo liệt kê MỌI actor: sau lưng robot, sau tường, cách 10 m
+đều biết chính xác. Train thẳng trên đó thì policy sống trong thế giới nơi
+người sau lưng LUÔN hiện hữu, rồi lên robot thật nó lái vào thế giới mù 274 độ
+phía sau - camera chỉ 86 độ. Nó chưa từng phải học giữ khoảng cách với chỗ mình
+không nhìn thấy, vì lúc train chuyện đó không tồn tại.
+
+Bật cờ trên thì ground_truth.relative_people() cắt theo đúng nón camera trước
+khi vào observation. NHỮNG NGƯỜI CÒN LẠI vẫn chính xác tuyệt đối - vẫn tách
+được lỗi policy khỏi lỗi detector, chỉ bỏ đi lợi thế robot thật không có.
+
+Ba số lấy TỪ URDF, đừng đoán lại (đổi URDF thì phải đổi cả đây, không tự đồng bộ):
+
+    camera_fov: 1.50098        <- <horizontal_fov>, depth_sensor.urdf.xacro
+    camera_max_range: 12.0     <- <clip><far> của cùng cảm biến
+    camera_offset_x: 0.10      <- depth_sensor_pose, 2wd_properties
+
+Kiểm hình học, 9 vị trí biết trước đáp án, tất cả đúng; biên cắt đo được ở giữa
+42 và 43 độ, khớp nửa FOV 43.0 độ.
+
+ÁP CHO CẢ HAI NGUỒN NGƯỜI, không riêng ground truth - vì nó mô tả CẢM BIẾN chứ
+không phải xuất xứ của con số.
+
+CHE KHUẤT - ĐÃ LÀM 29-08-2026:
+
+    env.people_occlusion: true        <- MẶC ĐỊNH
+
+HAI ĐƯỜNG RIÊNG, VÌ MỘT ĐƯỜNG KHÔNG ĐỦ:
+
+  1. ros_interface.occluded_by_scan() - tường, bàn ghế. Xét theo CẢ bề ngang
+     một người (occlusion_person_width 0.5 m) chứ không theo một tia: phải quá
+     nửa số tia cắt ngang người đó dừng sớm hơn họ ít nhất occlusion_margin
+     0.3 m thì mới coi là bị chắn. Lý do: một chân bàn rộng 3 độ không được
+     phép xoá cả một người đứng sau.
+  2. ros_interface.occluded_by_person() - NGƯỜI CHE NGƯỜI. Bắt buộc làm bằng
+     hình học, KHÔNG dùng được /scan: actor Gazebo không nằm trong không gian
+     ray-cast, tia xuyên thẳng qua họ (xem mục COLLISION CHO ACTOR). Xét tâm
+     người chắn có nằm trong nửa bề ngang (0.25 m) của đường ngắm không.
+
+CẢ HAI CHỈ ÁP CHO GROUND TRUTH. Không bao giờ áp cho /people của khối B thật:
+trên robot thật, người bị bàn che nửa dưới VẪN được camera nhìn thấy và YOLO
+báo đúng (lidar thấy bàn, camera thấy nửa trên) - lọc họ đi là xoá một người
+có thật, ngay trước mũi robot. ros_interface.observe() là chỗ chặn: nhánh
+_people_provider (chỉ tồn tại lúc train) mới chạy qua hai hàm này.
+
+Kiểm hình học offline, 13 tình huống biết trước đáp án, tất cả đúng: tường
+1.0 m chắn người ở 2.0 m -> True; chân bàn 3 độ -> False; tường ngay sau lưng
+người -> False; người thẳng hàng phía sau -> True; cặp nói chuyện cùng cự ly
+không che nhau -> False; người chắn lệch ngang 0.20 m -> True, 0.30 m -> False.
+
+-------------------------------------------------------------------------------
+ CHỈ SỐ BÓNG - LỊCH SỬ TRƯỚC THAY ĐỔI B  (29-08-2026)
+-------------------------------------------------------------------------------
+
+LƯU Ý HIỆN TẠI (01-09-2026): phần dưới ghi lại cơ chế cũ và phép đo đã dẫn tới
+quyết định B. `social_intrusion_hidden` nay ĐÃ đi vào reward với nguyên trọng số;
+không còn là diagnostic-only. Hai metric vẫn giữ riêng để phát hiện né giả.
+
+    env.measure_hidden_intrusion: true
+
+VẤN ĐỀ CŨ CÓ THẬT VỀ MẶT LOGIC: trước B, reward tính social_intrusion trên danh
+sách người ĐÃ LỌC (nón + che khuất), cùng object với thứ policy nhìn thấy. Hệ
+quả là NGƯỜI RA KHỎI NÓN THÌ VÙNG CỦA HỌ BIẾN MẤT VÀ TIỀN PHẠT VỀ 0. "Quay
+lưng đi" từng là cách rẻ để hết bị phạt mà vẫn đứng nguyên trong o-space.
+
+Ở cơ chế cũ, cờ này KHÔNG sửa gì cả mà chỉ ĐO. Mỗi bước tính thêm một intrusion
+trên danh sách người ĐẦY ĐỦ rồi đẩy lên tensorboard:
+
+    social/mean_peak_intrusion          <- metric trên danh sách đã lọc
+    social/mean_peak_intrusion_unseen   <- người đầy đủ; hiện cũng là nguồn reward
+    social/hidden_person_fraction       <- tỉ lệ bước có ít nhất một người bị giấu
+
+ĐỌC BA ĐƯỜNG CÙNG NHAU:
+  * hai đường đầu bám nhau      -> policy thật sự giữ khoảng cách với người
+  * _unseen tách lên cao hơn    -> policy chỉ đang giữ người ra khỏi khung hình
+  * hidden_person_fraction ~ 0  -> phép so vô nghĩa, KHÔNG phải là tin tốt
+
+Dòng log mỗi tập cũng in: "closest person X m (thuc su Y m), peak intrusion
+Z (unseen W over N steps)". "thuc su" có mặt vì minimum_person_distance CŨNG
+tính trên danh sách đã lọc, tức nó cũng mù.
+
+KẾT QUẢ ĐO 29-08-2026 - LỖ HỔNG CÓ THẬT, KHÔNG PHẢI GIẢ THUYẾT
+
+Phép đo 1, cơ chế: giữ robot đứng yên, QUAY TẠI CHỖ, đọc tiền phạt mỗi bước.
+
+    một người đứng cách 0.80 m, lệch 30 độ:
+        yaw 0-60 do    -> trong nón, phạt -4.74/bước
+        yaw 75-180 do  -> ngoài nón, phạt  0.00/bước   (intrusion THẬT 0.593)
+
+    robot đứng GIỮA HAI NGƯỜI ĐANG NÓI CHUYỆN, mỗi người cách 0.75 m:
+        intrusion THẬT = 1.000 ở MỌI hướng - nó đang ở giữa o-space
+        yaw 60-120 do  -> thấy 1 người, phạt -6.32/bước
+        yaw 0-45 va 135-180 do -> thấy 0 người, phạt 0.00/bước
+
+    9 trong 13 hướng thử cho tiền phạt BẰNG 0 ở đúng tình huống mà cả kiến
+    trúc này sinh ra để xử lý.
+
+Phép đo 2, trên run thật (policy chưa train):
+
+    tập  kịch bản      intrusion tính   intrusion thật   số bước bị giấu
+     3   crossing          1.00              1.00             169
+     4   crossing          0.00              1.00             227   <- mù hoàn toàn
+     5   talking           0.96              1.00             228
+
+    hidden_person_fraction trung bình 0.402.
+
+-------------------------------------------------------------------------------
+ BỘ NHỚ NGƯỜI - CÁI BỊT LỖ HỔNG TRÊN  (29-08-2026)
+-------------------------------------------------------------------------------
+
+    env.people_memory_time: 2.0          <- người đang đi
+    env.people_memory_time_still: 6.0    <- người đứng yên lúc thấy lần cuối
+
+ros_interface.PeopleMemory. Người ra khỏi tầm nhìn vẫn ở lại thêm ngần đó giây,
+vị trí ngoại suy theo vận tốc hằng - đúng giả thiết khối D đã dùng cho các kênh
+dự báo.
+
+KHÔNG phải "cho policy nhìn xuyên tường". Là: robot vừa nhìn thấy hai người bắt
+đầu nói chuyện thì không quên họ ngay lúc quay đầu. social_vlm_perception trên
+robot thật đã coast track đã mất tới tracking_timeout 6.0 s vì đúng lý do này.
+
+BA ĐIỂM DỄ LÀM SAI, ĐỪNG SỬA LẠI:
+
+  1. NHỚ TRONG frame goal (odom), KHÔNG PHẢI frame robot. Frame robot tự nó di
+     chuyển; nhớ trong đó thì người được nhớ sẽ trượt khắp phòng mỗi lần robot
+     dịch chuyển. Kiểm: robot quay 90 độ tại chỗ, người ở (1.0, 0.5) phải ra
+     (0.5, -1.0); robot đi tới 1.0 m, người ở 2.0 m phải còn 1.0 m.
+  2. HAI CỬA SỔ, KHÔNG PHẢI MỘT. Lý do duy nhất bắt cửa sổ phải ngắn là sai số
+     ngoại suy, mà với người đứng yên sai số đó BẰNG 0. Ngưỡng "đứng yên" đọc
+     thẳng từ observation.constraint_field.still_speed - đừng khai lại số 0.1
+     ở chỗ thứ hai.
+  3. reset() PHẢI GỌI bridge.forget_people(). Reset teleport robot; người được
+     nhớ mang sang tập mới sẽ được gọi lại ở một toạ độ vô nghĩa.
+
+ÁP CHO CẢ HAI NGUỒN NGƯỜI, và cho ĐÚNG MỘT danh sách - danh sách đó vừa vẽ kênh
+observation vừa tính tiền phạt.
+
+ĐO ĐƯỢC - robot đứng giữa cặp `talking` cách 0.75 m, nhìn 1.0 s rồi quay đi hẳn,
+tổng tiền phạt 30 bước (6.0 s):
+
+    tắt bộ nhớ    (0.0 / 0.0)   ->  -31.6   phạt 5/30 bước    <- lỗ hổng
+    một cửa sổ    (2.0 / 2.0)   ->  -94.7   phạt 15/30 bước   <- hở lại từ 2.8 s
+    MẶC ĐỊNH      (2.0 / 6.0)   -> -189.5   phạt 30/30 bước
+
+TRÊN RUN THẬT (1024 bước, 4 tập, policy chưa train):
+
+    tập  kịch bản      tính   thật   closest    thực sự   bước bị giấu
+     1   crossing      0.39   1.00    0.99 m     0.06 m       202
+     2   approaching   1.00   1.00    0.11 m     0.10 m       185
+     3   crossing      1.00   1.00    0.03 m     0.04 m       173
+     4   crossing      1.00   1.00    0.12 m     0.12 m       180
+
+    mean_peak_intrusion 0.848 so với _unseen 1.0; fps 4, bằng bản cũ.
+
+Tập 1 là khoảng hở còn lại và là khoảng hở ĐÚNG: có người tới sát 0.06 m mà
+robot CHƯA TỪNG nhìn thấy họ. Bộ nhớ không bịa ra được thứ chưa bao giờ quan
+sát - đó đúng là thứ robot thật cũng không xử lý được.
+
+ĐỪNG SO HAI RUN VỚI NHAU ĐỂ KẾT LUẬN: mẫu vài tập, hai policy chưa train hành
+xử khác nhau. Bằng chứng là phép đo có kiểm soát ở trên.
+
+ĐÁNH ĐỔI ĐÃ BIẾT, CHƯA XỬ LÝ: người đang đứng rồi bỏ đi trong lúc robot không
+nhìn sẽ để lại một vùng ma ở chỗ cũ tới 6 s. Nếu thấy policy né những chỗ trống
+thì đây là chỗ đầu tiên phải nghi.
+
+-------------------------------------------------------------------------------
+ COLLISION CHO ACTOR - ĐỪNG MẤT THỜI GIAN THỬ LẠI
+-------------------------------------------------------------------------------
+
+Actor trong lirs_test.world KHÔNG chặn tia lidar. Đây là lý do khối B (dù là
+ground-truth hay YOLO) là nguồn người DUY NHẤT trong observation - bỏ nó đi thì
+policy mù hoàn toàn với người và chỉ học né bàn ghế.
+
+CÁCH 1 - thêm <collision> cylinder vào <actor>: THẤT BẠI. Tia lidar vẫn xuyên.
+CÁCH 2 - đổi SetWorldPose(..., false, false) thành (..., true, false): THẤT BẠI.
+CÁCH 3 - thêm <model> proxy riêng, plugin kéo theo chân actor: CHẠY ĐƯỢC về kỹ
+    thuật (đo 2.903 m so với 2.910 m mong đợi), NHƯNG ĐÃ TẮT LẠI.
+
+VÌ SAO TẮT CÁCH 3: proxy làm lidar thấy người như vật cản, nên minimum_scan
+chạm obstacle_collision_distance 0.30 trong khi tâm người còn cách 0.45 m - tức
+là luật "va người kết thúc tập" quay lại qua cửa sau, đội lốt hit_obstacle.
+Đúng cái vách vực đã cố tình bỏ. Ba <model> proxy vẫn nằm trong lirs_test.world
+dưới dạng comment kèm số đo, bật lại thì phải hạ obstacle_collision_penalty
+cùng lúc.
+
+KẾT LUẬN: vấn đề nằm ở chỗ nó LÀ <actor>. Collision của actor trong Gazebo
+Classic 11 không nằm trong không gian ray-cast.
+
+-------------------------------------------------------------------------------
+ CÒN THIẾU GÌ SO VỚI SƠ ĐỒ
+-------------------------------------------------------------------------------
+
+KHỐI C (Video-VLM) - chưa làm. Chỗ nối đã sẵn: trường scene_type trong
+Person.msg. Khi có khối C, nó ghi vào đó và khối D đọc, KHÔNG cần đổi shape
+mạng, KHÔNG cần train lại. Hiện tracker thật để trống trường này và khối D rơi
+về bộ tỉ lệ trung tính '' - policy vẫn chạy, chỉ là không phân biệt được tình
+huống xã hội.
+
+KHỐI F (Safety shield CBF/QP) - chưa làm. social_velocity_filter.py hiện giữ
+vai trò gần giống (giảm tốc/dừng theo khoảng cách tới người) nhưng nó KHÔNG
+phải CBF/QP: không có hàm rào, không giải bài toán tối ưu, không đảm bảo bất
+biến tập an toàn. Khi làm khối F thì nó nằm GIỮA policy và base, đọc thêm quỹ
+đạo dự báo từ khối B.

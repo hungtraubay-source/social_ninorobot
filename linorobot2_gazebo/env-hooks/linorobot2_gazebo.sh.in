@@ -1,2 +1,7 @@
 ament_prepend_unique_value GAZEBO_MODEL_PATH "$COLCON_CURRENT_PREFIX/share/linorobot2_gazebo/models"
+# bookstore.world's aws_robomaker_retail_* <include> URIs resolve against
+# this. Separate from the map2gazebo `models` dir above: that one holds
+# floor-plan models generated from linorobot2_navigation/maps, this one holds
+# the AWS RoboMaker bookstore assets checked into the package.
+ament_prepend_unique_value GAZEBO_MODEL_PATH "$COLCON_CURRENT_PREFIX/share/linorobot2_gazebo/bookstore/models"
 ament_prepend_unique_value GAZEBO_PLUGIN_PATH "$COLCON_CURRENT_PREFIX/lib"

@@ -4,7 +4,8 @@
       <plugin name="differential_drive_controller" filename="libgazebo_ros_diff_drive.so">
         <ros>
           <remapping>odom:=odom/unfiltered</remapping>
-          <remapping>cmd_vel:=cmd_vel_safe</remapping>
+          <!-- cmd_vel:=cmd_vel_safe REMOVED (11-09-2026), matching
+               diff_drive.urdf.xacro; see the comment there. -->
         </ros>
 
         <num_wheel_pairs>2</num_wheel_pairs>

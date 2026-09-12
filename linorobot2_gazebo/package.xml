@@ -17,8 +17,10 @@
     <exec_depend>rclpy</exec_depend>
     <depend>rclcpp</depend>
     <depend>std_msgs</depend>
-    <depend>social_perception</depend>
     <depend>gazebo_ros</depend>
+    <!-- People.msg / Person.msg: the ground truth this package's actor
+         plugin publishes on /social_gt/people for RL training. -->
+    <depend>social_perception</depend>
     <exec_depend>geometry_msgs</exec_depend>
     <exec_depend>image_proc</exec_depend>
     <exec_depend>depth_image_proc</exec_depend>

@@ -1,0 +1,33 @@
+<?xml version="1.0"?>
+<package format="3">
+  <name>social_rl</name>
+  <version>0.1.0</version>
+  <description>Recurrent PPO (LSTM) person-avoidance policy for the linorobot2 base. Trains against Gazebo through the same /scan and /people interface the real robot exposes, and runs the trained policy as a plain cmd_vel node.</description>
+  <maintainer email="user@example.com">ninorobot2</maintainer>
+  <license>Apache-2.0</license>
+
+  <depend>rclpy</depend>
+  <depend>std_srvs</depend>
+  <depend>geometry_msgs</depend>
+  <depend>sensor_msgs</depend>
+  <depend>gazebo_msgs</depend>
+  <depend>robot_localization</depend>
+  <depend>social_perception</depend>
+  <depend>tf2_ros</depend>
+
+  <exec_depend>linorobot2_navigation</exec_depend>
+  <exec_depend>nav2_bringup</exec_depend>
+  <exec_depend>social_navigation</exec_depend>
+
+  <!-- stable-baselines3 / sb3-contrib / gymnasium are not rosdep keys on
+       Humble. They are pinned in requirements.txt and installed with pip. -->
+
+  <test_depend>ament_copyright</test_depend>
+  <test_depend>ament_flake8</test_depend>
+  <test_depend>ament_pep257</test_depend>
+  <test_depend>python3-pytest</test_depend>
+
+  <export>
+    <build_type>ament_python</build_type>
+  </export>
+</package>

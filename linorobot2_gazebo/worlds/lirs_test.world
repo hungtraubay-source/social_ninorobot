@@ -3,6 +3,32 @@
   <world name="lirs_test">
     
     <!-- Mở cổng Service để ROS 2 có thể điều khiển vị trí (Teleport) -->
+    <!-- Declared explicitly so the real-time ceiling is visible and tunable.
+
+         Without a <physics> block Gazebo takes its defaults, and the measured
+         consequence was real_time_factor pinned at 0.93-0.95 with the machine
+         74% idle: 4.2 RL steps/s, so 300 000 steps took 19.8 hours. The cap is
+         real_time_update_rate, not the CPU.
+
+         1000 with max_step_size 0.001 is exactly real time, which is the old
+         behaviour. Raise it -- or set it to 0 for "as fast as the CPU allows"
+         -- to trade fidelity for training throughput:
+
+             gz physics -u 0        change it on a RUNNING world, no restart
+
+         What that used to cost was the camera: at unlimited rate the depth
+         stream fell from 8 Hz to 5.72 Hz and /people arrived 2.945 s late,
+         far past people_timeout, so the policy trained as if nobody was ever
+         there. RL now reads /social_gt/people from the actor plugin instead,
+         which is computed in the world-update loop and cannot fall behind it,
+         so that particular objection is gone. Measure /scan and the step rate
+         at each ceiling before committing to one anyway.
+    -->
+    <physics name="default_physics" default="true" type="ode">
+      <max_step_size>0.001</max_step_size>
+      <real_time_update_rate>1000</real_time_update_rate>
+    </physics>
+
     <plugin name="gazebo_ros_state" filename="libgazebo_ros_state.so"/>
     <!-- Controls the preloaded actors below. Preloading is required because
          Gazebo classic does not reliably advance dynamically inserted actor
@@ -70,6 +96,48 @@
       </script>
     </actor>
     
+    <!-- walker_2 and walker_3 use the same m_doctor skin as walker_1 on
+         purpose. The root offsets baked into animated_people_release.cpp
+         (root_roll 1.206206, root height 0.886948) are the first Hips keyframe
+         of THIS .dae; another model's walk.dae has different ones and the
+         actor sinks into or floats above the floor. RL training reads ground
+         truth, not the camera, so three identical-looking people cost nothing
+         here -- give them distinct skins when block C (the video VLM) starts
+         looking at them, and measure the new offsets at the same time. -->
+    <actor name="walker_2">
+      <pose>0 0 -20 0 0 0</pose>
+      <skin>
+        <filename>model://Male/m_doctor/walk.dae</filename><scale>1.0</scale>
+      </skin>
+      <animation name="walking">
+        <filename>model://Male/m_doctor/walk.dae</filename>
+        <scale>1.0</scale><interpolate_x>false</interpolate_x>
+      </animation>
+      <script><loop>true</loop><delay_start>0</delay_start><auto_start>true</auto_start>
+        <trajectory id="0" type="walking">
+          <waypoint><time>0</time><pose>0 0 -20 0 0 0</pose></waypoint>
+          <waypoint><time>1.416667</time><pose>0 0 -20 0 0 0</pose></waypoint>
+        </trajectory>
+      </script>
+    </actor>
+
+    <actor name="walker_3">
+      <pose>0 0 -20 0 0 0</pose>
+      <skin>
+        <filename>model://Male/m_doctor/walk.dae</filename><scale>1.0</scale>
+      </skin>
+      <animation name="walking">
+        <filename>model://Male/m_doctor/walk.dae</filename>
+        <scale>1.0</scale><interpolate_x>false</interpolate_x>
+      </animation>
+      <script><loop>true</loop><delay_start>0</delay_start><auto_start>true</auto_start>
+        <trajectory id="0" type="walking">
+          <waypoint><time>0</time><pose>0 0 -20 0 0 0</pose></waypoint>
+          <waypoint><time>1.416667</time><pose>0 0 -20 0 0 0</pose></waypoint>
+        </trajectory>
+      </script>
+    </actor>
+
     <!-- Giữ lại mặt đất mặc định làm nền móng -->
     <include>
       <uri>model://ground_plane</uri>
@@ -78,13 +146,6 @@
     <!-- Cafe map as in the original world. -->
     <include>
       <uri>model://cafe</uri>
-      <pose>0 0 0 0 0 0</pose>
-    </include>
-
-    <!-- Static local bookshelf at the world/map origin.  The bookshelf model
-         defines its bottom at local z=0, so z=0 places it on the floor. -->
-    <include>
-      <uri>model://bookshelf</uri>
       <pose>0 0 0 0 0 0</pose>
     </include>
     
@@ -128,6 +189,80 @@
       <link name="table_leg"><pose>0 0 0.36 0 0 0</pose><collision name="collision"><geometry><cylinder><radius>0.05</radius><length>0.72</length></cylinder></geometry></collision>
         <visual name="visual"><geometry><cylinder><radius>0.05</radius><length>0.72</length></cylinder></geometry><material><diffuse>0.12 0.12 0.12 1</diffuse></material></visual></link>
     </model>
+
+    <!-- Physics twins for the actors: PRESENT BUT DISABLED.
+
+         Each actor once had a plain <model> twin holding a bare 0.15 m
+         collision cylinder, dragged to the actor's feet on every world update
+         by animated_people_factory, because a Gazebo Classic <actor> is
+         invisible to the ray sensor whatever <collision> it declares.
+
+         They are commented out on purpose. With the twins in place the lidar
+         saw a person as an obstacle, so minimum_scan reached
+         obstacle_collision_distance 0.30 while the person's centre was still
+         0.45 m away, and the RL episode ended there with the full
+         obstacle_collision_penalty. That is the terminal person collision
+         reward.py deliberately dropped on 27 08 2026, reappearing through the
+         lidar and wearing the label hit_obstacle. Approaching a person is now
+         priced only by the personal space ramp, which is what the reward
+         intends.
+
+         Uncomment all three to give people hard collision again. Doing so
+         reinstates that cliff, so lower obstacle_collision_penalty at the same
+         time. The plugin needs no rebuild either way: a missing <name>_proxy
+         model is skipped with one warning.
+
+         r 0.15 m is not a free choice if you do bring them back: minimum_scan
+         measures to the SURFACE while reward.person_collision_distance
+         measures to the CENTRE, so the obstacle rule fires once the centre is
+         0.30 + r away. Anything larger and a person registers as a table
+         before the person rule can fire.
+
+         No <visual> on purpose. The RGB and depth cameras must keep seeing the
+         skinned mesh alone: give this a visual and YOLO tracks a grey cylinder,
+         and the depth of a person becomes the depth of this instead. -->
+    <!--
+    <model name="m_sweater_proxy">
+      <static>true</static>
+      <pose>0 0 -20 0 0 0</pose>
+      <link name="link">
+        <collision name="collision">
+          <geometry>
+            <cylinder><radius>0.15</radius><length>0.90</length></cylinder>
+          </geometry>
+        </collision>
+      </link>
+    </model>
+
+    <model name="m_mechanic_proxy">
+      <static>true</static>
+      <pose>0 0 -20 0 0 0</pose>
+      <link name="link">
+        <collision name="collision">
+          <geometry>
+            <cylinder><radius>0.15</radius><length>0.90</length></cylinder>
+          </geometry>
+        </collision>
+      </link>
+    </model>
+
+    <model name="walker_1_proxy">
+      <static>true</static>
+      <pose>0 0 -20 0 0 0</pose>
+      <link name="link">
+        <collision name="collision">
+          <geometry>
+            <cylinder><radius>0.15</radius><length>0.90</length></cylinder>
+          </geometry>
+        </collision>
+      </link>
+    </model>
+    -->
+
+    <!-- The RGB-D camera used to be a static observer model here, on the wall
+         at (-3, 0, 2). It now rides on the robot: see the depth_sensor macro
+         in linorobot2_description/urdf/robots/2wd.urdf.xacro. Nothing in this
+         world renders a camera any more. -->
 
   </world>
 </sdf>
