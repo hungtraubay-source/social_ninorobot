@@ -378,7 +378,10 @@ def report_evaluation(rows, env_config):
         print(f'  simulated block C    ON  (wrong '
               f'{env_config.vlm_wrong_label_prob:.2f}, abstain '
               f'{env_config.vlm_abstain_prob:.2f}, every '
-              f'{env_config.vlm_period:.2f} s; REWARD USES TRUE LABELS)')
+              f'{env_config.vlm_period:.2f} s, confidence '
+              f'[{env_config.vlm_confidence_min:.2f}, '
+              f'{env_config.vlm_confidence_max:.2f}]; '
+              f'REWARD USES TRUE LABELS)')
     else:
         print('  simulated block C    off')
     print('-' * 72)

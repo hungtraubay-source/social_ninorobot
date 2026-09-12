@@ -80,7 +80,7 @@ Chúng chỉ hiện khi tốc độ tracker đạt ít nhất `prediction_min_sp
 
     # Terminal 4 - Nav2 + social costmap layer (KHÔNG bật rviz ở đây)
     ros2 launch linorobot2_navigation navigation.launch.py sim:=true \
-        map:=/home/son/ninorobot2/linorobot2_navigation/maps/cafe_vlm.yaml
+        map:=/home/son/social_ninorobot/linorobot2_navigation/maps/cafe_vlm.yaml
 
 -------------------------------------------------------------------------------
  TRƯỜNG HỢP 1 - NGƯỜI ĐỨNG NÓI CHUYỆN  (terminal 3)

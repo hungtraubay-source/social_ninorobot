@@ -4,7 +4,9 @@ Three things end or score a step, and nothing else:
 
     reach the goal                  +goal_reward, episode over
     touch an obstacle               obstacle_collision_penalty, episode over
-    stand inside K_soc              social_penalty, scaled by how deep in
+    stand inside K_soc              -lambda_s*(w_talk*C_talk + w_view*C_view
+                                    + w_cross*C_cross), one term per
+                                    scene_type bucket (12-09-2026)
 
 Nothing here treats a person as solid. That is deliberate and it depends on
 the world file: lirs_test.world keeps its actor collision proxies commented
@@ -47,7 +49,13 @@ class RewardConfig:
     """Weights and thresholds. All distances in metres, from base_link."""
 
     # --- terminal events ---
-    goal_reward: float = 200.0
+    # 12-09-2026: R_g/R_c từ báo cáo Gaussian (link arXiv 2009.04770 cho vùng
+    # xã hội, phần hàm thưởng là thiết kế riêng của dự án). Mọi hệ số shaping
+    # bên dưới chia theo TỈ LỆ CŨ với R_g/R_c để giữ nguyên mọi điểm hoà vốn
+    # đã tuning (200/-200 -> 20/-20 hôm 11-09, giờ -> 10/-10): progress_gain
+    # vẫn đúng 1/5 goal_reward, |step_penalty|*max_episode_steps vẫn đúng
+    # bằng |obstacle_collision_penalty|.
+    goal_reward: float = 10.0
     goal_distance: float = 0.35
 
     # Contact ends an episode only for obstacles now. They come from the
@@ -61,39 +69,44 @@ class RewardConfig:
     # away, which reinstated the terminal person collision dropped below,
     # relabelled hit_obstacle. They are commented out for that reason; check
     # the world before assuming people are invisible to /scan.
-    obstacle_collision_penalty: float = -200.0
+    obstacle_collision_penalty: float = -10.0
     # 0.26 is robot_radius in nav_sim.yaml; the margin makes the episode end
     # just before the mesh actually touches, where recovery is hopeless anyway.
     obstacle_collision_distance: float = 0.30
 
     # --- the social constraint field ---
-    # Charged per step, as social_penalty times how deep into K_soc the robot
-    # is standing: 0.0 outside every region, 1.0 inside somebody's o-space or
-    # inside the o-space of a conversation.
+    # 12-09-2026: replaced the single social_penalty with the report's
+    # three-way split:
     #
-    # This replaced a plain distance ramp (0 at 1.2 m, -8.0 at 0.20 m) on
-    # 28-08-2026. The ramp measured Euclidean distance and nothing else, so it
-    # charged the same for cutting between two people mid-conversation as for
-    # walking past somebody's back at the same range -- which made every
-    # scene_type in the observation decoration the policy had no reason to
-    # read. What the policy is SHOWN and what it is CHARGED FOR now come out of
-    # the same function in constraint_field.py, which is the only way the
-    # difference between those two situations reaches the gradient. During
-    # ground-truth training the caller evaluates that function on two lists:
-    # filtered people for observation, everybody for this reward.
+    #   r_social,t = -lambda_s * (w_talk*C_talk + w_view*C_view + w_cross*C_cross)
     #
-    # -8.0 keeps the tuned break-even from the old ramp: at full speed a step
-    # covers 0.1 m and earns +4.0 of progress against -0.8 of step penalty, so
-    # driving through the middle of a region nets -4.8 a step. Still a loss,
-    # and enough of one that going around wins, but bounded -- it does not end
-    # the episode and take everything it could still have earned with it.
-    social_penalty: float = -8.0
+    # C_talk/C_view/C_cross are the weighted Gaussian value (each zone's own
+    # weight already baked in) at the robot's EXACT position, split by
+    # scene_type via constraint_field.intrusion_by_type(): 'talking' on its
+    # own, 'waiting' on its own, everything else (passing, walking,
+    # unrecognised, backs_turned) pooled into 'cross' so no person ever falls
+    # through the reward for free. w_talk/w_view/w_cross is a SEPARATE axis
+    # from each zone's own weight in constraint_field.py -- that one shapes
+    # what the policy SEES, this one shapes what it is CHARGED, and they do
+    # not have to agree.
+    #
+    # Previously (social_penalty=-8.0, one term, MAX over every zone): at the
+    # centre of a talking pair (weight 0.9) that cost -7.2/step. With
+    # lambda_s=3, w_talk=1.0: -3*1.0*0.9 = -2.7/step -- noticeably lighter,
+    # because every situation type now carries its own weight (w_view=0.8,
+    # w_cross=0.6) instead of one shared factor for all of them. NOT
+    # retrained against yet -- check RUN_RL.txt before trusting a run built
+    # on these numbers.
+    lambda_s: float = 3.0
+    w_talk: float = 1.0
+    w_view: float = 0.8
+    w_cross: float = 0.6
 
     # --- shaping ---
     # Paid per metre of progress towards the goal, so one metre gained is worth
     # roughly a fifth of reaching it and the policy cannot farm shaping instead
     # of finishing.
-    progress_gain: float = 40.0
+    progress_gain: float = 2.0
     # Paid per radian that |bearing to goal| shrinks in a step. progress_gain
     # is zero while the robot rotates in place -- distance to the goal does not
     # change -- so with a start yaw drawn over the whole circle (02-09-2026)
@@ -104,7 +117,7 @@ class RewardConfig:
     # and near zero bearing it is dwarfed by progress (a full-speed step earns
     # +4.0), so it does not distort the drive-straight behaviour once aligned.
     # Set to 0.0 to recover the pre-02-09 reward exactly.
-    heading_gain: float = 5.0
+    heading_gain: float = 0.25
     # Charged every step regardless, which is what makes loitering expensive.
     #
     # -0.8, not the -0.5 it was. At -0.5 a full 250 step episode of standing
@@ -114,10 +127,11 @@ class RewardConfig:
     # 0.05 m/s. -0.8 puts a whole idle episode at exactly -200, level with the
     # collision it was hiding from.
     #
-    # Do not raise it past 0.8 without lowering obstacle_collision_penalty by
-    # as much. Once idling costs more than crashing, driving into the nearest
-    # wall becomes the cheap way out and the policy will find it.
-    step_penalty: float = -0.8
+    # Do not raise it past |obstacle_collision_penalty| / max_episode_steps
+    # (0.04 at 250 steps and -10.0 collision, 12-09-2026). Once idling costs
+    # more than crashing, driving into the nearest wall becomes the cheap way
+    # out and the policy will find it.
+    step_penalty: float = -0.04
 
     def to_dict(self) -> dict:
         return asdict(self)
@@ -144,7 +158,8 @@ class StepOutcome:
 def evaluate_step(config: RewardConfig, *, goal_distance: float,
                   previous_goal_distance: float, goal_bearing: float,
                   previous_goal_bearing: float, minimum_scan: float,
-                  social_intrusion: float) -> StepOutcome:
+                  talk_intrusion: float, view_intrusion: float,
+                  cross_intrusion: float) -> StepOutcome:
     """Score one control step and decide whether the episode ends here."""
     components = {}
 
@@ -154,11 +169,15 @@ def evaluate_step(config: RewardConfig, *, goal_distance: float,
     # so no goal is reachable only by first entering the collision radius.
     #
     # There is no matching check for people. Driving through somebody is
-    # priced entirely by the constraint field: -8.0 per step at the bottom of
-    # it. At full speed a step covers 0.1 m and earns +4.0 of progress, so
-    # passing right through a region nets -4.8 a step -- still a loss, and
-    # enough of one that going round wins, but no longer a cliff that ends the
-    # episode and everything it could still have earned.
+    # priced entirely by the constraint field, split by scene_type (12-09-2026,
+    # see RewardConfig.lambda_s). Talk_intrusion tops out at the 'talking'
+    # zone's own weight (0.9): -lambda_s*w_talk*0.9 = -3*1.0*0.9 = -2.7 at the
+    # worst point. At full speed a step covers 0.1 m and earns +0.2 of
+    # progress, so passing right through the centre of a conversation nets
+    # -2.54 a step -- still a loss, and enough of one that going round wins,
+    # but no longer a cliff that ends the episode and everything it could
+    # still have earned. See RewardConfig's field comments for the full
+    # arithmetic and its history.
     if minimum_scan <= config.obstacle_collision_distance:
         return StepOutcome(config.obstacle_collision_penalty, True,
                            'hit_obstacle',
@@ -178,7 +197,9 @@ def evaluate_step(config: RewardConfig, *, goal_distance: float,
         abs(previous_goal_bearing) - abs(goal_bearing))
     components['step'] = config.step_penalty
 
-    components['social'] = config.social_penalty * min(
-        max(social_intrusion, 0.0), 1.0)
+    components['social'] = -config.lambda_s * (
+        config.w_talk * min(max(talk_intrusion, 0.0), 1.0) +
+        config.w_view * min(max(view_intrusion, 0.0), 1.0) +
+        config.w_cross * min(max(cross_intrusion, 0.0), 1.0))
 
     return StepOutcome(float(sum(components.values())), False, '', components)

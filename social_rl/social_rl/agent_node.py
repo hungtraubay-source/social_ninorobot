@@ -59,9 +59,9 @@ class SocialRlAgent(Node):
         # social_rl/ground_truth.py stays unimportable here, which is what
         # keeps this node runnable on the robot.
         self.declare_parameter('people_topic_override', '')
-        # /cmd_vel, not /cmd_vel_safe: on the robot the firmware listens on
-        # /cmd_vel, and in simulation this leaves social_velocity_filter in the
-        # loop as a last line of defence behind the policy.
+        # /cmd_vel: the robot firmware listens on it, and (11-09-2026) so
+        # does the simulated diff_drive plugin now -- no filter node sits
+        # between this and the wheels in sim any more either.
         self.declare_parameter('cmd_vel_topic', '/cmd_vel')
         # The network is two 128-unit layers and one LSTM; on CPU a forward
         # pass is well under a millisecond, and it leaves the 4 GiB card to the

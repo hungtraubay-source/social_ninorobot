@@ -22,8 +22,10 @@ social_rl_agent:
     # nếu không sẽ không có cạnh map -> odom và node báo lỗi TF rồi đứng yên.
     goal_topic: /rl_goal_pose
 
-    # Ra /cmd_vel để social_velocity_filter vẫn đứng chắn phía sau policy
-    # (filter chuyển tiếp sang /cmd_vel_safe cho plugin diff_drive).
+    # 11-09-2026: plugin diff_drive trong sim giờ nghe thẳng /cmd_vel (bỏ
+    # remap cmd_vel:=cmd_vel_safe trong diff_drive.urdf.xacro) - không còn
+    # social_velocity_filter nào ở giữa để lệch lệnh thực thi khỏi lệnh
+    # policy chọn nữa, dù có chạy social_safety:=true hay không.
     cmd_vel_topic: /cmd_vel
 
     # Mạng nhỏ (LSTM 128 + 2x128), một lần forward dưới 1 ms trên CPU. Để cpu

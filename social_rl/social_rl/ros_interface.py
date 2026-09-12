@@ -22,7 +22,8 @@ from sensor_msgs.msg import LaserScan
 from social_perception.msg import People
 from tf2_ros import TransformException
 
-from social_rl.constraint_field import compile_zones, intrusion_at_zones
+from social_rl.constraint_field import (compile_zones, intrusion_at_zones,
+                                        intrusion_by_type)
 from social_rl.observation import (ObservationInput, RelativeEntity,
                                    build_observation)
 
@@ -147,7 +148,7 @@ class EnvConfig:
     vlm_period: float = 0.5
     # Đọc nhầm sang một nhãn khác. 0.2 ~ VLM 4-5 lớp đúng 70-85%.
     vlm_wrong_label_prob: float = 0.2
-    # Không dám kết luận -> trả '' -> khối D rơi về bộ tỉ lệ trung tính.
+    # Không dám kết luận -> trả '' -> khối D rơi về weight nền (0.5).
     vlm_abstain_prob: float = 0.1
     # Sai số hướng nhìn, radian. Giữ nguyên trong suốt một phán quyết chứ không
     # bốc lại mỗi bước - sai lệch của một model là nhất quán, còn nhiễu mỗi
@@ -159,6 +160,15 @@ class EnvConfig:
     vlm_facing_lost_prob: float = 0.0
     # 0 = ngẫu nhiên mỗi lần chạy. Đặt khác 0 để lặp lại đúng một run.
     vlm_seed: int = 0
+    # 11-09-2026: scene_confidence bốc ngẫu nhiên đều trong [min, max] mỗi lần
+    # phán quyết được vẽ lại (cùng nhịp vlm_period), thay vì luôn 1.0. Đây là
+    # đường DUY NHẤT confidence khác 1.0 lúc train -- nó chạy thẳng vào
+    # `factor = 1 + expansion_a*(1-c)` của constraint_field.py, nên các vùng
+    # QUAN SÁT ĐƯỢC co giãn kích thước ngẫu nhiên trong lúc reward (tính trên
+    # danh sách sự thật, confidence luôn 1.0) không đổi. Mặc định bằng
+    # [1.0, 1.0] tức KHÔNG ngẫu nhiên hoá, giữ hành vi cũ khi chưa bật.
+    vlm_confidence_min: float = 1.0
+    vlm_confidence_max: float = 1.0
 
     # Kept so old saved configs still load. Ground-truth training now always
     # computes the complete-list intrusion because reward depends on it; false
@@ -847,6 +857,10 @@ class PerceptionBridge:
             # separate from the complete-list value below so eval can compare
             # keeping distance with merely keeping people out of the view.
             'social_intrusion': intrusion_at_zones(visible_truth_field),
+            # 12-09-2026: C_talk/C_view/C_cross split of the line above, for
+            # reward.evaluate_step's three-way social term. Reward fallback
+            # when no simulator-only full list exists (people_source=perception).
+            'social_intrusion_by_type': intrusion_by_type(visible_truth_field),
             # What the policy believed it was in. Equal to the line above
             # unless simulated block C changed a label. Diagnostic only.
             'social_intrusion_shown': intrusion_at_zones(field),
@@ -862,14 +876,18 @@ class PerceptionBridge:
             'people_transform_valid': self.people_transform_valid,
         }
         # Full simulator truth, cone and occlusion ignored.  SocialAvoidEnv
-        # charges this value at the same social_penalty as the filtered one;
-        # keeping both values also preserves the visible-vs-full peak metric.
+        # charges this value with the same lambda_s/w_talk/w_view/w_cross as
+        # the filtered one; keeping both values also preserves the
+        # visible-vs-full peak metric.
         # Test against None rather than truthiness so an empty full scene emits
         # an authoritative 0.0 instead of looking like unavailable truth.
         if full_people is not None:
             hidden_field = compile_zones(
                 full_people, self._observation.constraint_field)
             state['social_intrusion_hidden'] = intrusion_at_zones(hidden_field)
+            # 12-09-2026: the ground-truth reward source's C_talk/C_view/C_cross.
+            state['social_intrusion_hidden_by_type'] = intrusion_by_type(
+                hidden_field)
             # Clamped: memory can recall somebody the scene no longer lists
             # at all, which would otherwise read as a negative count.
             state['hidden_people'] = max(len(full_people) - len(people), 0)

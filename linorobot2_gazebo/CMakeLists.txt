@@ -33,7 +33,7 @@ if(NOT SCRIPT_RESULT EQUAL 0)
 endif()
 
 install(
-  DIRECTORY launch rviz worlds
+  DIRECTORY launch rviz worlds bookstore
   DESTINATION share/${PROJECT_NAME}
 )
 

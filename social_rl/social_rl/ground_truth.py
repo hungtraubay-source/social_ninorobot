@@ -42,9 +42,9 @@ from social_rl.ros_interface import visible_to_camera
 
 # What block C will be able to say. '' is not in here: an abstention is drawn
 # separately, because "I could not tell" is a different failure from "I read it
-# wrong", and block D treats it differently -- '' selects the neutral (1,1,1)
-# scales rather than another situation's shape.
-VLM_LABELS = ('talking', 'passing', 'standing', 'walking')
+# wrong", and block D treats it differently -- '' selects the base weight (0.5)
+# rather than another situation's shape.
+VLM_LABELS = ('talking', 'passing', 'waiting', 'walking')
 
 # The plugin no longer carries scene_type on Person.msg (block B is tracking
 # only). During training the situation is the scenario the trainer asked for,
@@ -56,7 +56,7 @@ _SCENARIO_SCENE_TYPE = {
     'passing': 'passing',
     'crossing': 'passing',
     'approaching': 'passing',
-    'standing': 'standing',
+    'waiting': 'waiting',
     'none': '',
     '': '',
 }
@@ -93,6 +93,13 @@ class SimulatedVLM:
     Held per track and only re-drawn every vlm_period seconds, which produces
     the latency and the flicker of a real 1-3 Hz video model without needing a
     separate parameter for either.
+
+    scene_confidence is drawn the same way (vlm_confidence_min/max), and it is
+    NOT diagnostic-only like the label: it flows into
+    constraint_field.ConstraintFieldConfig's `factor`, so a low draw actually
+    grows the Gaussian region the policy sees for that person. Ground truth
+    stays confidence 1.0 always -- see `relative_people` -- so the reward's
+    geometry never moves; only what the policy is shown does.
     """
 
     def __init__(self, env_config, logger=None):
@@ -107,8 +114,10 @@ class SimulatedVLM:
                 f'simulated block C is ON: every {env_config.vlm_period:.2f} s '
                 f'a ruling is re-drawn per person, wrong with probability '
                 f'{env_config.vlm_wrong_label_prob:.2f}, abstained with '
-                f'{env_config.vlm_abstain_prob:.2f}. The REWARD still uses the '
-                f'true labels -- see SimulatedVLM.')
+                f'{env_config.vlm_abstain_prob:.2f}, scene_confidence in '
+                f'[{env_config.vlm_confidence_min:.2f}, '
+                f'{env_config.vlm_confidence_max:.2f}]. The REWARD still uses '
+                f'the true labels -- see SimulatedVLM.')
         # track_id -> (stamp, label, facing_offset, facing_lost)
         self._held = {}
         self.corrupted = 0
@@ -132,7 +141,14 @@ class SimulatedVLM:
         # average out to the truth over a few frames.
         offset = self._rng.gauss(0.0, self._env.vlm_facing_sigma)
         lost = self._rng.random() < self._env.vlm_facing_lost_prob
-        return label, offset, lost
+        # Same held-per-ruling treatment: a real classifier's certainty on one
+        # sighting does not jitter step to step either. Feeds constraint_field
+        # factor = 1 + expansion_a*(1-c) directly, so this is what makes the
+        # Gaussian regions the POLICY sees vary in size during training instead
+        # of always sitting at factor 1.0.
+        confidence = self._rng.uniform(self._env.vlm_confidence_min,
+                                       self._env.vlm_confidence_max)
+        return label, offset, lost, confidence
 
     def corrupt(self, people, now, robot_yaw):
         """Return the list the POLICY sees. The caller keeps the true one.
@@ -155,11 +171,12 @@ class SimulatedVLM:
             if entry is None or elapsed >= self._env.vlm_period or elapsed < 0.0:
                 entry = (now,) + self._draw(person.scene_type)
                 self._held[person.track_id] = entry
-            _, label, offset, lost = entry
+            _, label, offset, lost, confidence = entry
             facing = -robot_yaw if lost else _wrap(person.facing + offset)
             if label != person.scene_type:
                 self.corrupted += 1
-            shown.append(replace(person, scene_type=label, facing=facing))
+            shown.append(replace(person, scene_type=label, facing=facing,
+                                 scene_confidence=confidence))
         for track_id in [key for key in self._held if key not in present]:
             del self._held[track_id]
         return shown

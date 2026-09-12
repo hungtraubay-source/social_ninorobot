@@ -14,10 +14,11 @@
 # một khoá thì chương trình báo lỗi ngay lúc khởi động chứ không im lặng bỏ qua.
 
 env:
-  # Ghi thẳng vào topic mà plugin diff_drive nghe, bỏ qua
-  # social_velocity_filter: nếu để filter ở giữa thì lệnh thực thi khác lệnh
-  # policy chọn, và policy học nhầm quyết định của người khác.
-  cmd_vel_topic: /cmd_vel_safe
+  # 11-09-2026: plugin diff_drive giờ nghe thẳng /cmd_vel (bỏ remap
+  # cmd_vel:=cmd_vel_safe trong diff_drive.urdf.xacro), nên ghi vào đây luôn
+  # là ghi đúng topic - không còn social_velocity_filter nào ở giữa để lệch
+  # lệnh thực thi khỏi lệnh policy chọn.
+  cmd_vel_topic: /cmd_vel
   scan_topic: /scan
 
   # --- khối B + C: người ở đâu, đang làm gì ---
@@ -191,6 +192,20 @@ env:
   vlm_facing_lost_prob: 0.0
   # 0 = ngẫu nhiên mỗi lần chạy. Khác 0 để lặp lại đúng một run khi truy lỗi.
   vlm_seed: 0
+
+  # 11-09-2026: scene_confidence bốc đều trong [min, max] mỗi lần phán quyết
+  # được vẽ lại (cùng nhịp vlm_period ở trên), thay vì luôn 1.0 như ground
+  # truth thật. Đây là cách DUY NHẤT trong lúc train khiến các vùng Gaussian
+  # POLICY NHÌN THẤY co giãn kích thước ngẫu nhiên - confidence chạy thẳng vào
+  # factor = 1 + expansion_a*(1-c) của constraint_field.py. Reward vẫn tính
+  # trên danh sách sự thật (confidence 1.0 cố định) nên không bị ảnh hưởng, xem
+  # ground_truth.SimulatedVLM.
+  #
+  # CHỈ có tác dụng khi vlm_noise: true ở trên (cùng curriculum: bật SAU khi
+  # policy đã biết lái). vlm_noise vẫn đang false ở trên - đặt true khi tới
+  # lúc, đừng bật cả hai cùng lúc từ bước 0 (xem mục CURRICULUM, RUN_RL.txt).
+  vlm_confidence_min: 0.7
+  vlm_confidence_max: 0.9
 
   # --- DANH SÁCH ĐẦY ĐỦ CHO REWARD + ĐO CHÉO (01-09-2026) ---
   # Mỗi bước ground_truth tính thêm K_soc trên MỌI người, không nón camera và
@@ -532,14 +547,14 @@ observation:
   # Lưới cục bộ, gốc ở robot, trục x hướng mũi robot lên phía trên ảnh.
   # 32 ô x 0.2 m = hộp 6.4 x 6.4 m quanh robot.
   #
-  # 6 KÊNH, chia theo đúng sơ đồ:
-  #   kênh 0     khối H - occupancy tĩnh do tia lidar chạm (nhị phân 0/1)
-  #   kênh 1..5  khối D - trường ràng buộc xã hội K_soc tại t+0.0, +0.5,
-  #              +1.0, +1.5, +2.0 s
+  # 2 KÊNH kể từ khi bỏ dự báo quỹ đạo (khối B chỉ còn tracking):
+  #   kênh 0  khối H - occupancy tĩnh do tia lidar chạm (nhị phân 0/1)
+  #   kênh 1  khối D - trường ràng buộc xã hội K_soc Gaussian tại hiện tại
+  #           (prediction_times chỉ còn [0.0])
   #
-  # Occupancy KHÔNG gộp vào K_soc: tường thì 2 giây nữa vẫn ở đó còn người thì
-  # không, mà nếu cho hai thứ chung một con số thì policy không cách nào học
-  # được khác biệt đó.
+  # Occupancy KHÔNG gộp vào K_soc: tường thì vẫn ở đó còn người thì di chuyển,
+  # mà nếu cho hai thứ chung một con số thì policy không cách nào học được
+  # khác biệt đó.
   #
   # Đổi grid_size hoặc số phần tử prediction_times thì mạng CNN đổi kích thước,
   # model cũ KHÔNG nạp lại được.
@@ -572,107 +587,116 @@ observation:
   robot_frame: base_link
 
   # --- khối D: grounding + biên dịch trường ràng buộc xã hội ---
+  # 11-09-2026: bỏ dự báo quỹ đạo (khối B chỉ còn tracking) và đổi hình dạng
+  # vùng từ ellipse tuyến tính O/P/R sang Gaussian dị hướng, khớp công thức
+  # social_perception/scripts/social_constraint_grounding.py chạy trên robot
+  # thật - xem docstring đầu social_rl/social_rl/constraint_field.py để có
+  # công thức đầy đủ.
   constraint_field:
-    # Chân trời dự báo 2.0 s, bước 0.5 s, CỘNG mốc hiện tại t=0.0. SỐ PHẦN TỬ
-    # ở đây = số kênh xã hội.
-    #
-    # VÌ SAO CÓ t=0.0 (đo 30-08-2026). Trước đây mốc này bị bỏ vì kênh t+0.5 s
-    # gần như phủ lên nó - đúng với người ĐỨNG, sai với người ĐANG ĐI. Đuôi
-    # vùng chỉ với tới 0.64 m sau lưng (r_rear 0.75 x scale 0.85 của
-    # `walking`), mà ở 1.0 m/s nó chạy 0.5 m mỗi mốc, tức nhanh hơn robot bám
-    # sau. Đo: robot đứng sau người đi 1.0 m/s 0.3 m thì hàm thưởng phạt 1.000
-    # trong khi CẢ BỐN kênh dự báo đọc ra 0.000. `crossing` 1.2 m/s và
-    # `approaching` 1.0 m/s thủng y hệt; `talking` thì không, vì người đứng im.
-    # Robot đi sau người trong hành lang rơi đúng vào hình học đó.
-    prediction_times: [0.0, 0.5, 1.0, 1.5, 2.0]
+    # Chỉ còn mốc hiện tại t=0.0. SỐ PHẦN TỬ ở đây = số kênh xã hội, nên đổi
+    # độ dài list này đổi luôn kích thước CNN.
+    prediction_times: [0.0]
 
-    # Hình học O/P/R lấy nguyên từ social_navigation/src/social_layer.cpp (chỗ
-    # đã tuning cho costmap Nav2), nhưng làm LIÊN TỤC thay vì ba mức chi phí
-    # rời rạc 254/250/100: policy học từ dốc trượt xuống được, không học tốt từ
-    # ba cao nguyên phẳng.
-    #
-    # o_radius: lõi trong, giá trị 1.0 ở mọi chỗ bên trong.
-    # r_*: ellipse ngoài, giá trị 0.0 trên biên. Lệch trước/sau vì vùng cá nhân
-    # vốn lệch: người ta để ý người đứng TRƯỚC MẶT hơn hẳn người đứng SAU LƯNG.
-    o_radius: 0.45
-    r_front: 1.5
-    r_side: 1.0
-    r_rear: 0.75
+    # Khoảng cách cá nhân cơ sở d0, và hệ số nở theo độ tin cậy tình huống:
+    # factor = 1 + expansion_a * (1 - scene_confidence). Ground-truth luôn cho
+    # confidence 1.0 nên factor = 1.0 khi train từ Gazebo.
+    d0: 0.5
+    expansion_a: 0.5
+    # Sigma phía trước nở theo tốc độ người đi: sigma_h = factor*(d0 + speed_gain_k*speed).
+    speed_gain_k: 0.5
 
-    # Đây chính là bước "grounding": CÙNG một người, CÙNG vị trí, CÙNG vận tốc
-    # nhưng scene_type khác thì vùng ràng buộc khác. Không có bảng này thì
-    # scene_type chỉ là đồ trang trí.
-    # Thứ tự mỗi dòng: [trước, ngang, sau].
-    scene_scales:
-      talking:      [1.25, 1.0, 0.90]   # đang bận nói chuyện, vùng nghiêng về phía người kia
-      backs_turned: [1.00, 0.9, 0.45]   # quay lưng lại - đi vòng ra sau là ĐÚNG phép, nên cắt mạnh vùng sau
-      passing:      [1.10, 1.35, 0.80]  # người đi ngang qua (10-09-2026 gộp crossing+approaching, lấy hệ số crossing)
-      walking:      [1.15, 1.0, 0.85]
-      '':           [1.00, 1.0, 1.00]   # không biết gì (chạy khi chưa có khối C)
+    # Đỉnh Gaussian theo scene_type - đây chính là bước "grounding": CÙNG một
+    # người, CÙNG vị trí, CÙNG vận tốc nhưng scene_type khác thì độ ưu tiên
+    # tránh khác. Không có bảng này thì scene_type chỉ là đồ trang trí.
+    weights:
+      talking: 0.9
+      waiting: 0.7
+      passing: 0.5
+      walking: 0.5
+      '': 0.5
 
-    # O-space của NHÓM: hai người scene_type `talking` đứng gần nhau hơn
-    # group_max_distance thì khoảng giữa họ bị tô đặc. Đây là lý do tồn tại của
-    # cả kiến trúc này - chỗ DUY NHẤT robot không được đi qua.
+    # Hai người scene_type `talking` đứng gần nhau hơn khoảng này chia sẻ MỘT
+    # Gaussian ở điểm giữa (hard zone) - chỗ DUY NHẤT robot không được đi qua.
     group_max_distance: 3.0
-    group_margin: 0.35
 
-    # Dự báo càng xa càng kém tin, nên vùng NỞ RA theo thời gian thay vì giảm
-    # giá trị: nên giữ khoảng cách với chỗ người ta CÓ THỂ tới nhiều hơn là với
-    # chỗ người ta ĐANG đứng. 0.15 m/s => kênh t+2.0 s rộng hơn 0.30 m.
-    # Đặt 0.0 để xem dự báo vận tốc hằng thô.
-    uncertainty_growth: 0.15
-    # Dưới tốc độ này coi như đứng yên, để nhiễu tracker trên một người đang
-    # đứng không bôi vùng của họ dài 2 mét ở kênh t+2.0 s.
+    # 11-09-2026: KHÔNG còn neo vào toạ độ một vật thật trong Gazebo (đo
+    # trước đó khiến người `waiting` đứng đè lên kệ sách - không kiểm tra
+    # được hình học mesh bằng mắt). d_obj giờ là hằng số này, KHÔNG phải
+    # khoảng cách đo thật; orientation lấy thẳng từ person.facing. Xem
+    # docstring compile_zones trong constraint_field.py.
+    waiting_distance: 0.7
+
+    # Dưới tốc độ này coi như đứng yên -> nhận vùng tròn `base`, không phải
+    # `passing`, để nhiễu tracker trên người đứng im không bị đọc thành đang đi.
     still_speed: 0.1
 
 reward:
+  # 11-09-2026: TOÀN BỘ khối reward chia 10 (200/-200 -> 20/-20 theo yêu cầu,
+  # còn lại chia theo để giữ NGUYÊN mọi tỉ lệ/điểm hoà vốn đã tuning bên dưới -
+  # nhân cả hàm thưởng với một hằng số dương không đổi optimal policy). Mỗi số
+  # cũ vẫn giữ nguyên trong comment lịch sử của nó, chỉ giá trị cuối dòng đổi.
+  # Điều CHƯA đo: vf_coef (0.5, mục train: bên dưới) cân bằng value-loss (MSE,
+  # theo BÌNH PHƯƠNG biên độ reward) với policy-loss - reward nhỏ đi 10 lần thì
+  # value-loss nhỏ đi ~100 lần, vf_coef hiệu lực yếu đi tương đối. Không có
+  # VecNormalize nào tự bù (đã kiểm tra train.py). Không tự tăng vf_coef ở đây
+  # vì chưa có số đo; theo dõi explained_variance/value_loss trên TensorBoard
+  # sau lần train tới, báo lại nếu bất thường.
+  #
   # --- kết thúc tập ---
-  goal_reward: 200.0
+  # 12-09-2026: R_g/R_c đổi theo báo cáo (10/-10). Lịch sử đầy đủ của các lần
+  # đổi trước (200/-200 gốc -> 20/-20 ngày 11-09) nằm trong RUN_RL.txt, không
+  # chép lại ở đây. mọi hệ số shaping bên dưới CHIA TIẾP 1/2 theo cùng tỉ lệ để
+  # giữ nguyên điểm hoà vốn: progress_gain vẫn đúng 1/5 goal_reward,
+  # |step_penalty|*max_episode_steps vẫn đúng bằng |obstacle_collision_penalty|.
+  goal_reward: 10.0
   goal_distance: 0.35
 
-  # CHỈ va vật cản mới kết thúc tập. Luật "va người -> -200, kết thúc tập" đã
-  # BỎ (27-08-2026): nó biến mọi lần thử men ra sau lưng người thành vách vực.
+  # CHỈ va vật cản mới kết thúc tập. Luật "va người -> kết thúc tập" đã BỎ
+  # (27-08-2026): nó biến mọi lần thử men ra sau lưng người thành vách vực.
   # Xem RUN_RL.txt mục HÀM THƯỞNG.
-  obstacle_collision_penalty: -200.0
+  obstacle_collision_penalty: -10.0
   obstacle_collision_distance: 0.30   # robot_radius 0.26 + lề
 
-  # --- vùng xã hội: cùng phép K_soc, trên danh sách ground-truth ĐẦY ĐỦ ---
-  # Phạt mỗi step = social_penalty * độ sâu robot đang đứng trong K_soc
-  # (0.0 = ngoài mọi vùng, 1.0 = trong o-space của một người hoặc của một cuộc
-  # trò chuyện).
+  # --- vùng xã hội: 3 số hạng tách theo scene_type (12-09-2026, theo báo cáo
+  # "Công thức Gauss") thay cho social_penalty gộp MAX duy nhất trước đó ---
   #
-  # THAY THẾ dốc phạt theo khoảng cách cũ (0 ở 1.2 m, -8.0 ở 0.20 m) ngày
-  # 28-08-2026. Dốc cũ chỉ đo khoảng cách Euclid, nên nó tính TIỀN NHƯ NHAU cho
-  # việc chen giữa hai người đang nói chuyện và việc đi ngang sau lưng một
-  # người ở cùng cự ly - tức là mọi scene_type trong observation đều thành đồ
-  # trang trí mà policy không có lý do gì phải đọc. Thứ policy NHÌN THẤY và thứ
-  # policy BỊ PHẠT vẫn ra từ cùng phép K_soc trong constraint_field.py, nhưng
-  # observation dùng danh sách đã lọc còn reward dùng danh sách người đầy đủ.
+  #   r_social,t = -lambda_s * (w_talk*C_talk + w_view*C_view + w_cross*C_cross)
   #
-  # -8.0 giữ nguyên điểm hoà vốn đã tuning: chạy hết tốc độ, một step đi được
-  # 0.1 m, được +4.0 progress trừ -0.8 step penalty; đi xuyên giữa vùng thì
-  # -4.8 mỗi step. Vẫn lỗ, đủ để đi vòng có lợi hơn, nhưng CÓ CHẶN TRÊN - không
-  # cắt tập và cuốn theo mọi điểm tập đó còn có thể kiếm được.
+  # C_talk/C_view/C_cross: giá trị Gaussian (đã nhân weight riêng của từng
+  # zone: talking 0.9, waiting 0.7, còn lại 0.5) tại ĐÚNG vị trí robot, tách
+  # theo scene_type qua constraint_field.intrusion_by_type() - 'talking' riêng,
+  # 'waiting' riêng, còn lại (passing/walking/không rõ/backs_turned) dồn vào
+  # 'cross' để KHÔNG người nào thoát khỏi vòng phạt (đứng yên chưa rõ tình
+  # huống thì vẫn tính là vùng phải né, không phải không gian trống).
   #
-  # -8.0 -> -12.0 (05-09-2026). Run 20260905_091740 (resume 160000, 80k step ở
-  # 1:1:1:1, social_penalty vẫn -8.0): --eval-episodes 40 ra peak_intrusion
-  # 0.317, TỆ HƠN 160000 lúc xuất phát (0.081) - xuyên thẳng qua vùng người rẻ
-  # hơn hẳn so với vòng tránh với đúng mức phạt này khi tập có người dày hơn.
-  # -12.0: đi xuyên hết tốc độ giờ lỗ -8.8/step (+4.0 progress -0.8 step -12.0
-  # social) thay vì -4.8, nặng hơn ~1.8 lần nhưng vẫn KHÔNG kết thúc tập, không
-  # tạo vách vực như luật va-người cũ (xem ghi chú obstacle_collision_penalty ở
-  # trên) - chỉ đẩy điểm hoà vốn nghiêng hẳn về phía đi vòng.
-  social_penalty: -12.0
+  # w_talk/w_view/w_cross là trục ĐỘC LẬP với weight riêng của từng zone ở
+  # trên: cái đó định hình QUAN SÁT (CNN nhìn thấy gì), cái này định hình
+  # PHẠT (train quan trọng hoá loại tình huống nào hơn) - không cần khớp nhau.
+  #
+  # Bộ số khởi tạo từ báo cáo, λs chọn 3 trong {1,3,5}. Tại tâm một cặp
+  # `talking` (weight 0.9): -3*1.0*0.9 = -2.7/step. Đi xuyên hết tốc độ
+  # (+0.2 progress -0.04 step -2.7 social) = -2.54/step - vẫn lỗ, đủ để đi
+  # vòng có lợi hơn. CHƯA train lại để kiểm chứng con số này thật sự cân bằng
+  # đúng - xem RUN_RL.txt trước khi tin một run dựa trên bộ số này.
+  lambda_s: 3.0
+  w_talk: 1.0
+  w_view: 0.8
+  w_cross: 0.6
 
   # --- shaping: hai thứ duy nhất giữ cho bài toán học được ---
   # progress_gain là thứ DUY NHẤT làm robot chịu đi. 40 * 1 m = 40 = 1/5 phần
   # thưởng tới đích, đủ để dẫn đường mà không đủ để cày shaping thay vì về đích.
-  progress_gain: 40.0
-  # -0.8: một tập đứng yên trọn vẹn 250 bước tốn đúng -200, ngang với cái va
-  # chạm mà nó đang né. ĐỪNG đẩy quá 0.8 mà không hạ obstacle_collision_penalty
-  # tương ứng - hễ đứng yên đắt hơn đâm thì lao vào tường gần nhất thành lối
-  # thoát rẻ, và policy sẽ tìm ra nó.
-  step_penalty: -0.8
+  #
+  # 40.0 -> 4.0 (11-09-2026) -> 2.0 (12-09-2026, chia tiếp 1/2 theo R_g mới):
+  # vẫn đúng 1/5 goal_reward (10.0), tỉ lệ dẫn đường không đổi.
+  progress_gain: 2.0
+  # Charged mỗi step, đây là thứ khiến đứng yên/lượn lờ tốn tiền.
+  #
+  # -0.8 -> -0.08 (11-09-2026) -> -0.04 (12-09-2026, chia tiếp 1/2). Kiểm tra
+  # ranh giới: 0.04 * 250 = 10.0 = |obstacle_collision_penalty| mới - vẫn
+  # đúng biên. ĐỪNG đẩy quá |obstacle_collision_penalty|/max_episode_steps -
+  # hễ đứng yên đắt hơn đâm thì lao vào tường gần nhất thành lối thoát rẻ.
+  step_penalty: -0.04
   # Thưởng theo radian mà |góc lệch tới đích| co lại trong một bước. progress_gain
   # bằng 0 khi robot xoay tại chỗ (khoảng cách tới đích không đổi), nên với yaw
   # start ngẫu nhiên 360 (02-09-2026) khoảng nửa số tập mở đầu bằng một cú xoay
@@ -697,7 +721,12 @@ reward:
   # liều đâm. Trả lại 5.0. Nút thắt none_goal không nằm ở heading_gain: đã thử
   # 3.0/5.0/9.0, LR 3e-4/1e-4, scenario 1:1:1:1/6:1:1:1, đều plateau ~0.6. Đang
   # chuyển hướng sang curriculum yaw khởi động (xem sample yaw trong ros_env.py).
-  heading_gain: 5.0
+  #
+  # 5.0 -> 0.5 (11-09-2026) -> 0.25 (12-09-2026, chia tiếp 1/2). Vẫn đúng tỉ
+  # lệ với progress_gain mới (2.0): 0.2 rad/bước = +0.05, ròng +0.01 trên
+  # step_penalty mới (-0.04) - cùng biên độ tương đối như 5.0 từng có với
+  # progress_gain 40.
+  heading_gain: 0.25
 
   # ĐÃ BỎ angular_penalty và smoothness_penalty. Cả hai đánh vào đúng hành vi
   # cần học: đi vòng qua người BẮT BUỘC phải xoay. Muốn lệnh mượt hơn thì hạ

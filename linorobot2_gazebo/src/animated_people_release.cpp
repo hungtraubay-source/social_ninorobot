@@ -116,6 +116,17 @@ public:
       [this](std_msgs::msg::String::ConstSharedPtr message) {
         SelectScenario(message->data);
       });
+    // 12-09-2026: /animated_people/scenario is a one-shot command, gone the
+    // instant it is sent -- a subscriber that starts (or restarts, as
+    // zone_markers.py does every debug session) after that message is lost
+    // has no way to learn the current scenario from that topic itself.
+    // TRANSIENT_LOCAL + depth 1 here means a late subscriber gets the last
+    // bare scenario name immediately on connecting, no resend needed. This
+    // plugin lives as long as Gazebo does, so it is the one stable place to
+    // hold that state.
+    scenario_state_publisher_ = node_->create_publisher<std_msgs::msg::String>(
+      "/animated_people/current_scenario",
+      rclcpp::QoS(1).transient_local());
     gzmsg << "Animated people factory plugin loaded\n";
   }
 
@@ -789,17 +800,18 @@ private:
         centre_y + side * reach * std::sin(sideways),
         centre_x - side * reach * std::cos(sideways),
         centre_y - side * reach * std::sin(sideways),
-        // 0.40-0.75, not the 0.6-1.1 it was. The arithmetic, on the default
-        // route: it is 4.79 m long, so the robot at 0.5 m/s covers it in
-        // 9.58 s and reaches a crossing placed 35-75% along at t = 3.35-7.18 s.
-        // A walker starting 2.5-3.5 m out has to average reach/t to be at the
-        // crossing point when the robot is -- 0.75-1.04 m/s for the earliest
-        // placement, but only 0.47-0.66 mid-route and 0.35-0.49 for the
-        // latest. The old range was tuned for the near end of that and walked
-        // through and away before the robot arrived everywhere else, which
-        // turns a crossing episode into an empty one. This band centres on the
-        // mid-route figure.
-        NextUniform(0.40, 0.75));
+        // 0.8-1.0 (11-09-2026, requested range). Was 0.40-0.75, tuned so the
+        // walker's average speed (reach/t) matched the robot reaching a
+        // crossing placed anywhere in ratio 0.35-0.75: 0.75-1.04 m/s for the
+        // earliest placement but only 0.35-0.66 m/s mid/late-route -- see the
+        // arithmetic this replaced, still true, just above in git blame. At a
+        // FIXED 0.8-1.0 m/s the walker crosses too early relative to the
+        // robot for roughly the back half of that ratio range, which is the
+        // "empty crossing" failure this range used to avoid. Not re-tuned
+        // here; verify with `ros2 topic echo /social_gt/people` that the
+        // walker and robot are still both present near the crossing point
+        // before trusting this in a training run.
+        NextUniform(0.8, 1.0));
     }
     spawned_ = true;
     gzmsg << "Spawned crossing scenario with " << count << " walker(s)\n";
@@ -830,7 +842,8 @@ private:
       RoutePoint(NextUniform(-0.25, -0.05), offset, &to_x, &to_y);
       WalkLine(
         kWalkers[index], "passing", from_x, from_y, to_x, to_y,
-        NextUniform(0.5, 0.9));
+        // 0.8-1.0 (11-09-2026, requested range). Was 0.5-0.9.
+        NextUniform(0.8, 1.0));
     }
     spawned_ = true;
     gzmsg << "Spawned approaching scenario with " << count << " walker(s)\n";
@@ -874,6 +887,39 @@ private:
     gzmsg << "Spawned backs-turned pair facing " << facing << " rad\n";
   }
 
+  // One person stands still, scene_type `waiting`, facing a real bookshelf
+  // (BookshelfA_01_001 in bookstore.world) -- but placed via RoutePoint like
+  // talking/backs_turned, i.e. NOT close enough to it to ever overlap the
+  // mesh (11-09-2026: an earlier version stood the person right next to the
+  // shelf and that put the actor inside it as often as not, since this
+  // package cannot see the mesh to place against it precisely). Facing is a
+  // real bearing to the shelf for visual plausibility only; the Gaussian
+  // math still uses the tuned constant `waiting_distance`
+  // (constraint_field.py), not this real distance, which is usually several
+  // metres and would otherwise inflate the region for no reason.
+  void SpawnWaitingPeople()
+  {
+    std::lock_guard<std::mutex> lock(actor_mutex_);
+    if (spawned_) {
+      return;
+    }
+    ClearScenario();
+    double person_x = 0.0;
+    double person_y = 0.0;
+    RoutePoint(NextUniform(0.45, 0.75), NextUniform(-0.6, 0.6),
+      &person_x, &person_y);
+    const double shelf_x = 1.405153;
+    const double shelf_y = -1.449740;
+    const double facing = std::atan2(shelf_y - person_y, shelf_x - person_x);
+    SpawnTalkingActor(
+      "m_sweater", person_x, person_y,
+      facing + kStandingMeshYawOffset, 1.112927, 0.878344, 3.75, 0.0,
+      facing, "waiting");
+    spawned_ = true;
+    gzmsg << "Spawned waiting person at (" << person_x << ", " << person_y <<
+      "), facing shelf at (" << shelf_x << ", " << shelf_y << ")\n";
+  }
+
   // The conversation pair, but placed somewhere on the route rather than at
   // the fixed spot SpawnPeople uses. The line between them is what the robot
   // must not cross.
@@ -887,7 +933,13 @@ private:
     // The axis they face each other along. Randomised so the robot does not
     // always meet the pair broadside.
     const double axis = NextUniform(-M_PI, M_PI);
-    const double half_gap = 0.5 * NextUniform(1.6, pair_separation_);
+    // Person-to-person gap in [1.0, 1.5] m (11-09-2026, requested range).
+    // Was NextUniform(1.6, pair_separation_) = [1.6, 2.8]; narrower on purpose
+    // to make the pair a tighter squeeze for the policy. No physical actor
+    // collision exists to violate (the proxy collision cylinders are
+    // commented out in lirs_test.world), so nothing stops the robot driving
+    // this close mechanically -- it is a training-difficulty choice only.
+    const double half_gap = 0.5 * NextUniform(1.0, 1.5);
     double centre_x = 0.0;
     double centre_y = 0.0;
     // OFF THE ROUTE ON PURPOSE, NOT ON IT (31-08-2026). This used to be
@@ -971,6 +1023,12 @@ private:
     std::string scenario;
     stream >> scenario;
 
+    // Latched republish of the bare name, so a late subscriber (zone_markers.py
+    // after a restart) can catch up without anyone resending the command.
+    std_msgs::msg::String state_message;
+    state_message.data = scenario;
+    scenario_state_publisher_->publish(state_message);
+
     // "<scenario>", "<scenario> <seed>", "<scenario> route x0 y0 x1 y1", or
     // both. The `route` keyword rather than four bare numbers because a seed
     // is also a bare number and the two forms would be ambiguous.
@@ -1039,6 +1097,8 @@ private:
       SpawnApproachingPeople();
     } else if (scenario == "backs_turned") {
       SpawnBacksTurnedPeople();
+    } else if (scenario == "waiting") {
+      SpawnWaitingPeople();
     } else if (scenario == "gathering") {
       SpawnGatheringPeople();
     } else if (scenario == "static_pair") {
@@ -1046,8 +1106,8 @@ private:
       SpawnPeople();
     } else {
       gzerr << "Unknown scenario [" << scenario << "]. Known: talking, "
-        "passing, crossing, approaching, backs_turned, gathering, static_pair, "
-        "none\n";
+        "passing, crossing, approaching, backs_turned, waiting, gathering, "
+        "static_pair, none\n";
     }
   }
 
@@ -1099,6 +1159,7 @@ private:
   rclcpp::Subscription<std_msgs::msg::Empty>::SharedPtr hide_subscription_;
   rclcpp::Subscription<std_msgs::msg::String>::SharedPtr scenario_subscription_;
   rclcpp::Publisher<social_perception::msg::People>::SharedPtr people_publisher_;
+  rclcpp::Publisher<std_msgs::msg::String>::SharedPtr scenario_state_publisher_;
   std::vector<TalkingActor> talking_actors_;
   std::vector<WalkingActor> walking_actors_;
   std::vector<GatheringActor> gathering_actors_;

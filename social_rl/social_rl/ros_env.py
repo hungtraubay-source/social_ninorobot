@@ -38,8 +38,8 @@ from social_rl.ros_interface import (EnvConfig, PerceptionBridge,
                                      scale_action)
 
 
-def _reward_social_intrusion(state: dict, has_ground_truth: bool) -> float:
-    """Choose the authoritative social depth for this environment step.
+def _reward_intrusion_by_type(state: dict, has_ground_truth: bool) -> dict:
+    """Choose the authoritative C_talk/C_view/C_cross for this step.
 
     Ground-truth mode must fail loudly if the bridge ever stops supplying the
     full scene; silently falling back there would reopen the turn-away
@@ -47,8 +47,8 @@ def _reward_social_intrusion(state: dict, has_ground_truth: bool) -> float:
     Perception mode has no simulator-only list and deliberately uses its
     visible/remembered value.
     """
-    key = ('social_intrusion_hidden'
-           if has_ground_truth else 'social_intrusion')
+    key = ('social_intrusion_hidden_by_type'
+           if has_ground_truth else 'social_intrusion_by_type')
     return state[key]
 
 
@@ -613,7 +613,7 @@ class SocialAvoidEnv(gym.Env):
         # away or hiding somebody behind an occluder cannot erase the social
         # penalty.  The perception path has no privileged list and therefore
         # falls back explicitly to what its tracker supplied.
-        social_intrusion = _reward_social_intrusion(
+        intrusion_by_type = _reward_intrusion_by_type(
             state, has_ground_truth=self._ground_truth is not None)
         outcome = evaluate_step(
             self.reward_config,
@@ -622,7 +622,9 @@ class SocialAvoidEnv(gym.Env):
             goal_bearing=state['goal_bearing'],
             previous_goal_bearing=self._previous_goal_bearing,
             minimum_scan=state['minimum_scan'],
-            social_intrusion=social_intrusion)
+            talk_intrusion=intrusion_by_type['talking'],
+            view_intrusion=intrusion_by_type['waiting'],
+            cross_intrusion=intrusion_by_type['cross'])
 
         self._previous_goal_distance = state['goal_distance']
         self._previous_goal_bearing = state['goal_bearing']
