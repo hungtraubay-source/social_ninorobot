@@ -1,0 +1,25 @@
+# Chạy policy đã train TRÊN ROBOT THẬT.
+#
+# Khác bản sim đúng ba dòng: use_sim_time, topic goal và topic cmd_vel. Mọi thứ
+# còn lại (observation, giới hạn tốc độ, ngưỡng tới đích) đọc từ env_config.yaml
+# cạnh model, y hệt lúc train.
+social_rl_agent:
+  ros__parameters:
+    use_sim_time: false
+
+    model_path: ""
+    env_config: ""
+
+    # Đích gửi vào đây phải mang frame_id trùng env.goal_frame trong
+    # <run_dir>/env_config.yaml (mặc định `odom`, vì RL không chạy Nav2). Gửi
+    # frame_id: map khi không có AMCL thì node báo lỗi tra cứu TF và đứng yên.
+    goal_topic: /rl_goal_pose
+
+    # Firmware micro-ROS trên base nghe cố định /cmd_vel. Nếu chạy kèm
+    # social_safety.launch.py ở bản thật thì filter đã chiếm /cmd_vel làm đầu
+    # vào; khi đó đổi dòng này sang /cmd_vel_rl và đặt input_topic của filter
+    # cho khớp, đừng để hai node cùng publish một topic.
+    cmd_vel_topic: /cmd_vel
+
+    device: cpu
+    deterministic: true

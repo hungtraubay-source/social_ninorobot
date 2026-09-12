@@ -4,7 +4,13 @@
       <plugin name="differential_drive_controller" filename="libgazebo_ros_diff_drive.so">
         <ros>
           <remapping>odom:=odom/unfiltered</remapping>
-          <remapping>cmd_vel:=cmd_vel_safe</remapping>
+          <!-- cmd_vel:=cmd_vel_safe REMOVED (11-09-2026, requested): the
+               plugin now takes plain /cmd_vel directly, no bridge node
+               needed for teleop/Nav2/RL. social_navigation/social_safety
+               still targets /cmd_vel_safe; if that filter is launched now
+               it writes to a topic nobody reads, so it has NO effect any
+               more. Re-add this remapping if khối F (safety shield) is ever
+               built and needs a distinct filtered-input topic again. -->
         </ros>
         <updateRate>100</updateRate>
         <left_joint>left_wheel_joint</left_joint>

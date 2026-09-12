@@ -205,6 +205,38 @@ Visualization Manager:
         Reliability Policy: Reliable
         Value: /robot_path
       Value: true
+    - Alpha: 0.7
+      Class: rviz_default_plugins/Map
+      Color Scheme: costmap
+      Draw Behind: false
+      Enabled: true
+      Name: Social Costmap
+      Topic:
+        Depth: 5
+        Durability Policy: Volatile
+        History Policy: Keep Last
+        Reliability Policy: Reliable
+        Value: /social_rl/social_costmap
+      Update Topic:
+        Depth: 5
+        Durability Policy: Volatile
+        History Policy: Keep Last
+        Reliability Policy: Reliable
+        Value: /social_rl/social_costmap/update
+      Use Timestamp: false
+      Value: true
+    - Class: rviz_default_plugins/MarkerArray
+      Enabled: true
+      Name: Social Zones
+      Namespaces:
+        {}
+      Topic:
+        Depth: 5
+        Durability Policy: Volatile
+        History Policy: Keep Last
+        Reliability Policy: Reliable
+        Value: /social_rl/zone_markers
+      Value: true
   Enabled: true
   Global Options:
     Background Color: 238; 238; 236
@@ -245,7 +277,21 @@ Visualization Manager:
       Target Frame: <Fixed Frame>
       Value: Orbit (rviz)
       Yaw: 4.753573417663574
-    Saved: ~
+    Saved:
+      - Class: rviz_default_plugins/TopDownOrtho
+        Enable Stereo Rendering:
+          Stereo Eye Separation: 0.05999999865889549
+          Stereo Focal Distance: 1
+          Swap Stereo Eyes: false
+          Value: false
+        Invert Z Axis: false
+        Name: TopDown
+        Near Clip Distance: 0.009999999776482582
+        Scale: 100
+        Target Frame: <Fixed Frame>
+        Value: TopDownOrtho (rviz)
+        X: 0
+        Y: 0
 Window Geometry:
   Displays:
     collapsed: false

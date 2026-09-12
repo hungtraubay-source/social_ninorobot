@@ -13,6 +13,7 @@
 # limitations under the License.
 
 import os
+from ament_index_python.packages import get_package_share_directory
 from launch import LaunchDescription
 from launch.actions import (DeclareLaunchArgument, ExecuteProcess,
                             IncludeLaunchDescription, SetEnvironmentVariable,
@@ -45,17 +46,36 @@ def generate_launch_description():
         if is_model_root:
             gazebo_model_paths.append(path)
 
+    # sdformat rewrites the URDF's `package://<pkg>/...` mesh URIs to
+    # `model://<pkg>/...`, so the parent of each package's share directory has
+    # to stay on the path or every STL in the robot ends up "No mesh specified".
+    for pkg in ('linorobot2_description',):
+        share_parent = os.path.dirname(get_package_share_directory(pkg))
+        if share_parent not in gazebo_model_paths:
+            gazebo_model_paths.append(share_parent)
+
     ekf_config_path = PathJoinSubstitution(
         [FindPackageShare("linorobot2_base"), "config", "ekf.yaml"]
     )
 
     world_path = PathJoinSubstitution(
-        [FindPackageShare("linorobot2_gazebo"), "worlds", "lirs_test.world"]
+        [FindPackageShare("linorobot2_gazebo"), "worlds", "bookstore.world"]
     )
 
-    # Models used by the animated-people plugin in lirs_test.world.
+    # Character meshes the animated-people plugin loads for the actors in
+    # lirs_test.world.
     social_models_path = PathJoinSubstitution(
         [FindPackageShare("social_navigation"), "models"]
+    )
+
+    # aws_robomaker_retail_* models bookstore.world (the default world above)
+    # includes by model:// URI. Not on GAZEBO_MODEL_PATH otherwise -- the
+    # ament env hook (linorobot2_gazebo.sh.in) adds it too, but this
+    # SetEnvironmentVariable below replaces the process environment for
+    # everything launched from here, so the hook's value alone never reaches
+    # gzserver.
+    bookstore_models_path = PathJoinSubstitution(
+        [FindPackageShare("linorobot2_gazebo"), "bookstore", "models"]
     )
 
     # Keep Gazebo usable in a fresh terminal even when ~/.bashrc does not
@@ -69,10 +89,13 @@ def generate_launch_description():
         [FindPackageShare('linorobot2_description'), 'launch', 'description.launch.py']
     )
 
-    # The simulated diff-drive plugin only subscribes to /cmd_vel_safe, so this
-    # filter is the single bridge from /cmd_vel to the wheels. Starting it here
-    # keeps plain teleop and SLAM working without an extra terminal; it passes
-    # commands through untouched whenever /people is absent.
+    # 11-09-2026: the simulated diff-drive plugin now subscribes to plain
+    # /cmd_vel (diff_drive.urdf.xacro no longer remaps it to /cmd_vel_safe),
+    # so this filter is NOT a bridge to the wheels any more -- it still
+    # reads /cmd_vel and republishes to /cmd_vel_safe, but nothing listens
+    # there now, so enabling it has no effect on the robot at all. Kept only
+    # for social_navigation's own Nav2-comparison scenarios, which may still
+    # reference /cmd_vel_safe directly; not for anything in this launch file.
     social_safety_launch_path = PathJoinSubstitution(
         [FindPackageShare('social_navigation'), 'launch', 'social_safety.launch.py']
     )
@@ -85,7 +108,7 @@ def generate_launch_description():
         SetEnvironmentVariable(
             name='GAZEBO_MODEL_PATH',
             value=[os.pathsep.join(gazebo_model_paths), os.pathsep,
-                   social_models_path]
+                   social_models_path, os.pathsep, bookstore_models_path]
         ),
 
         DeclareLaunchArgument(
@@ -95,9 +118,21 @@ def generate_launch_description():
         ),
 
         DeclareLaunchArgument(
-            name='rviz', 
+            name='rviz',
             default_value='false', # Mặc định là bật, đổi thành 'false' nếu muốn mặc định tắt
             description='Launch RViz'
+        ),
+
+        DeclareLaunchArgument(
+            name='gui',
+            default_value='true',
+            description='Open the Gazebo 3D window (gzclient). false runs headless'
+        ),
+
+        DeclareLaunchArgument(
+            name='gpu_render',
+            default_value='true',
+            description='Render gzserver on the discrete GPU via PRIME offload'
         ),
 
         DeclareLaunchArgument(
@@ -107,15 +142,17 @@ def generate_launch_description():
         ),
 
         DeclareLaunchArgument(
-            name='publish_odom_tf',
-            default_value='false',
-            description='Let Gazebo diff-drive publish odom -> base_footprint; use only when run_ekf=false'
-        ),
-
-        DeclareLaunchArgument(
             name='social_safety',
-            default_value='true',
-            description='Bridge /cmd_vel to /cmd_vel_safe and limit speed near people'
+            # 11-09-2026: the diff-drive plugin no longer listens on
+            # /cmd_vel_safe at all (see diff_drive.urdf.xacro), so this arg
+            # no longer affects whether the robot moves -- true just starts
+            # social_velocity_filter writing to a topic nobody reads. Left
+            # here, default false, only because social_navigation's own
+            # Nav2-comparison scenarios may still expect it launchable this
+            # way; do not rely on it to bridge anything any more.
+            default_value='false',
+            description='(vestigial) start social_velocity_filter; it no '
+                        'longer reaches the robot, see comment above'
         ),
 
         DeclareLaunchArgument(
@@ -144,7 +181,7 @@ def generate_launch_description():
 
         DeclareLaunchArgument(
             name='spawn_y', 
-            default_value='0.0',
+            default_value='-2.0',
             description='Robot spawn position in Y axis'
         ),
 
@@ -162,9 +199,40 @@ def generate_launch_description():
             description='Robot spawn heading'
         ),
 
+        # gzserver and gzclient are started separately rather than through the
+        # `gazebo` wrapper so the PRIME offload below can apply to the server
+        # alone. The server is what rasterises the observer camera that feeds
+        # YOLO and the VLM; the client only draws a window a human looks at.
         ExecuteProcess(
-            cmd=['gazebo', '--verbose', '-s', 'libgazebo_ros_factory.so',  '-s', 'libgazebo_ros_init.so', LaunchConfiguration('world')],
-            output='screen'
+            cmd=['gzserver', '--verbose', '-s', 'libgazebo_ros_factory.so',
+                 '-s', 'libgazebo_ros_init.so', LaunchConfiguration('world')],
+            output='screen',
+            # This machine is `prime-select on-demand`, so OpenGL defaults to
+            # the Intel iGPU and the camera is rasterised on the CPU side while
+            # the Quadro sits idle between inferences. Offloading just the
+            # server moves that onto the Quadro for ~100 MiB of the 4 GiB card,
+            # which the 2 GiB left over after the VLM absorbs. Set
+            # gpu_render:=false to measure the difference.
+            additional_env={
+                '__NV_PRIME_RENDER_OFFLOAD': '1',
+                '__GLX_VENDOR_LIBRARY_NAME': 'nvidia',
+            },
+            condition=IfCondition(LaunchConfiguration('gpu_render'))
+        ),
+
+        ExecuteProcess(
+            cmd=['gzserver', '--verbose', '-s', 'libgazebo_ros_factory.so',
+                 '-s', 'libgazebo_ros_init.so', LaunchConfiguration('world')],
+            output='screen',
+            condition=UnlessCondition(LaunchConfiguration('gpu_render'))
+        ),
+
+        # The 3D window is the single largest CPU consumer in the sim and
+        # nothing in the pipeline reads from it. gui:=false when measuring.
+        ExecuteProcess(
+            cmd=['gzclient'],
+            output='screen',
+            condition=IfCondition(LaunchConfiguration('gui'))
         ),
 
         # Gazebo and robot_state_publisher start in parallel. Wait until the
@@ -202,8 +270,10 @@ def generate_launch_description():
         ),
 
         # The saved map is built by SLAM, whose origin is wherever the robot
-        # started, not the Gazebo world origin. Only z stays 0: the map is 2D
-        # and the navigation layers ignore height.
+        # started, not the Gazebo world origin. Publishing this edge as identity
+        # silently shifts everything anchored in `world` by the spawn offset
+        # once it is drawn on the map. Only z stays 0: the map is 2D and the
+        # layers ignore height.
         Node(
             package='tf2_ros',
             executable='static_transform_publisher',
@@ -219,6 +289,12 @@ def generate_launch_description():
             ],
             parameters=[{'use_sim_time': use_sim_time}]
         ),
+
+        # The camera used to be a static model in the world and needed two
+        # static transforms here to place it on the map. It is now a link of
+        # the robot, so robot_state_publisher owns
+        # base_link -> camera_link -> camera_depth_link and nothing about the
+        # camera is published from this launch any more.
 
         Node(
             package='rviz2',
@@ -255,8 +331,6 @@ def generate_launch_description():
                 'rviz': 'false',
                 'use_sim_time': str(use_sim_time),
                 'publish_joints': 'false',
-                'xacro_args': ['publish_odom_tf:=',
-                               LaunchConfiguration('publish_odom_tf')],
                 'urdf': LaunchConfiguration('urdf')
             }.items()
         ),

@@ -1,0 +1,6 @@
+# torch is NOT listed: this workspace already has 2.13.0+cu130 built against the
+# installed driver, and letting pip resolve torch again would replace it with a
+# CPU wheel.
+sb3-contrib>=2.4.0,<3.0      # RecurrentPPO lives here, pulls stable-baselines3
+gymnasium>=0.29,<1.1
+tensorboard>=2.14
