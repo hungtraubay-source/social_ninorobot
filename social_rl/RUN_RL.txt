@@ -1041,8 +1041,12 @@ một chỗ khác - nếu cố định thì policy học thuộc VỊ TRÍ chứ
 
     talking        hai người đứng đối mặt nói chuyện, trục quay ngẫu nhiên,
                    khoảng cách 1.0 - 1.5 m (11-09-2026, trước là 1.6 - 2.8 m),
-                   tâm cặp lệch 0.4 - 1.0 m khỏi tuyến về một bên bốc ngẫu
-                   nhiên (xem mục ngay dưới)
+                   tâm cặp lệch 0.7 - 0.9 m khỏi tuyến về một bên bốc ngẫu
+                   nhiên (12-09-2026, thu hẹp từ 0.4-1.0 m - đúng điểm đo
+                   được 100% tập có "usable slope" trong bảng đo ở
+                   animated_people_release.cpp, để đảm bảo robot GẶP vùng xã
+                   hội trên đường tới đích gần như mọi tập, theo yêu cầu pha
+                   none80/talking20 học lái + học né một chút)
     crossing       MỘT người đi CẮT NGANG tuyến đường, vuông góc, 0.8-1.0 m/s
                    (11-09-2026, trước 0.40-0.75 m/s - CHƯA re-tune lại timing
                    cắt ngang theo route ratio, xem cảnh báo tại chỗ sửa trong

@@ -71,7 +71,9 @@ class SocialConstraintGrounding(Node):
         self.declare_parameter('combine_mode', 'max')
 
         # Tham số hàm Gauss
-        self.declare_parameter('gaussian_d0_m', 0.5)
+        # 15-09-2026: 0.5 -> 0.8, đồng bộ social_rl/config/rl_train.yaml
+        # (khối D train) - xem constraint_field.py để có công thức đầy đủ.
+        self.declare_parameter('gaussian_d0_m', 0.8)
         self.declare_parameter('gaussian_a', 0.5)
         self.declare_parameter('gaussian_c', 0.9)
         self.declare_parameter('gaussian_k_s', 0.5)
@@ -85,7 +87,9 @@ class SocialConstraintGrounding(Node):
         # Stationary is a manually selected, object-independent one-person
         # case.  Keep the radius tunable in YAML rather than baking a training
         # scenario constant into the geometry code.
-        self.declare_parameter('stationary_sigma_m', 0.5)
+        # 15-09-2026: 0.5 -> 0.4, đồng bộ constraint_field._base_sigmas()
+        # bên train (giờ d0/2 = 0.8/2 = 0.4, không còn = d0 nữa).
+        self.declare_parameter('stationary_sigma_m', 0.4)
         self.declare_parameter('social_weight_stationary', 0.5)
         self.declare_parameter('social_weight_crossing', 0.5)
         # Standing means a person looking at one configured object.  The
@@ -336,7 +340,8 @@ class SocialConstraintGrounding(Node):
             raise ValueError('Hai nguoi trung vi tri, khong tinh duoc truc yaw')
 
         factor = 1.0 + self.gaussian_a * (1.0 - self.gaussian_c)
-        sigma_h = sigma_r = factor * (separation_m + self.gaussian_d0) / 4.0
+        # 15-09-2026: /4 -> /3, đồng bộ constraint_field._talking_sigmas().
+        sigma_h = sigma_r = factor * (separation_m + self.gaussian_d0) / 3.0
         sigma_s = sigma_h / 3.0
 
         # Tam Gauss la trung diem cua hai nguoi: (x1+x2)/2, (y1+y2)/2

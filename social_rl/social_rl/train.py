@@ -614,6 +614,26 @@ def main():
                                       tensorboard_log=run_dir,
                                       custom_objects=resume_overrides(
                                           resume_path, train_config))
+            # load() also restores policy.optimizer's state_dict -- Adam's
+            # per-parameter running averages of gradient and squared
+            # gradient, not just the weights. Measured 13-09-2026 across
+            # three chained resumes (20260912_182533 -> ... -> 302032,
+            # ent_coef 0.001 then 0.0003): train/std went 0.9943 -> 0.8495
+            # over 300k+ steps and its rate of decline HALVED after cutting
+            # ent_coef 3x, the opposite of what a cleaner entropy/signal
+            # ratio should do (entropy's pull on log_std is a constant, it
+            # does not taper off as std shrinks). Adam's own memory of 300k
+            # steps of a near-zero effective gradient on log_std is the only
+            # thing left that explains a slower response to a stronger
+            # signal. Rebuilding the optimizer keeps every learned weight
+            # (policy.state_dict() is untouched) and only drops that memory,
+            # for every parameter, not log_std alone -- there is no way to
+            # reset one parameter's Adam state without touching the rest.
+            model.policy.optimizer = model.policy.optimizer_class(
+                model.policy.parameters(), lr=model.lr_schedule(1),
+                **model.policy.optimizer_kwargs)
+            print('[social_rl] reset optimizer state (Adam moments) on '
+                  'resume; weights unchanged')
         else:
             model = RecurrentPPO(
                 'MultiInputLstmPolicy', env,
