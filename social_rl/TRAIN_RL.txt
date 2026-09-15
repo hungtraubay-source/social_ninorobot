@@ -1,0 +1,119 @@
+===============================================================================
+ social_rl - BẢNG LỆNH NHANH (train / resume / tensorboard / eval)
+===============================================================================
+
+Đây chỉ là bảng tra lệnh. Lý do đằng sau từng tham số, lịch sử tuning, các bẫy
+đã gặp nằm ở social_rl/RUN_RL.txt - đọc file đó trước khi đổi tham số, đừng chỉ
+copy lệnh ở đây rồi đoán.
+
+Luôn cần 2 terminal chạy song song (xem RUN_RL.txt mục "CHỈ CẦN HAI TERMINAL"):
+
+    Terminal 1: Gazebo (mở trước, giữ suốt phiên)
+    Terminal 2: trainer / eval / tensorboard (lệnh bên dưới chạy ở đây)
+
+    Terminal 1:
+        cd ~/social_ninorobot && source install/setup.bash
+        ros2 launch linorobot2_gazebo gazebo.launch.py gui:=false
+
+-------------------------------------------------------------------------------
+ 1. TRAIN TỪ ĐẦU (trọng số ngẫu nhiên)
+-------------------------------------------------------------------------------
+
+    cd ~/social_ninorobot && source install/setup.bash
+    ros2 launch social_rl rl_train.launch.py
+
+Đọc train.total_timesteps trong social_rl/config/rl_train.yaml để biết chạy
+bao lâu. Không truyền resume: là train mới hoàn toàn.
+
+-------------------------------------------------------------------------------
+ 2. TRAIN TIẾP TỪ CHECKPOINT (resume)
+-------------------------------------------------------------------------------
+
+    cd ~/social_ninorobot && source install/setup.bash
+    ros2 launch social_rl rl_train.launch.py \
+        resume:=~/social_rl_runs/<run>/checkpoints/recurrent_ppo_<step>_steps.zip \
+        timesteps:=<SỐ BƯỚC TRAIN THÊM>
+
+Lưu ý:
+    - `timesteps` khi resume là "train THÊM bấy nhiêu step", KHÔNG phải tổng.
+      Đang ở 95000, muốn train thêm 60000 -> timesteps:=60000 (dừng ở 155000).
+    - Có thể truyền thẳng đường dẫn thư mục run thay vì file .zip
+      (resume:=~/social_rl_runs/<run>) - script tự lấy final_model.zip, hoặc
+      checkpoint mới nhất nếu không có final_model.zip.
+    - Run mới LUÔN ghi ra thư mục MỚI (timestamp khác), không ghi đè run cũ.
+    - Sửa `train:` trong YAML (learning_rate, ent_coef, n_steps...) trước khi
+      resume thì các khoá đó ĐƯỢC ép vào - xem RUN_RL.txt mục "--resume NUỐT
+      TOÀN BỘ MỤC train:" để biết khoá nào ép được, khoá nào không.
+    - Mỗi lần resume, optimizer Adam bị reset (trọng số giữ nguyên) - xem
+      train.py, comment "reset optimizer state (Adam moments) on resume".
+
+-------------------------------------------------------------------------------
+ 3. XEM TENSORBOARD
+-------------------------------------------------------------------------------
+
+    tensorboard --logdir ~/social_rl_runs
+
+Mở trình duyệt vào địa chỉ TensorBoard in ra (mặc định localhost:6006). Theo
+dõi để SHORTLIST checkpoint - KHÔNG chọn checkpoint cuối cùng để nghiệm thu chỉ
+bằng TensorBoard, phải chạy --eval bên dưới trên đúng file .zip.
+
+-------------------------------------------------------------------------------
+ 4. EVAL MỘT CHECKPOINT / MODEL (deterministic, không học)
+-------------------------------------------------------------------------------
+
+    cd ~/social_ninorobot && source install/setup.bash
+    ros2 run social_rl train_rl \
+        --eval ~/social_rl_runs/<run>/checkpoints/recurrent_ppo_<step>_steps.zip \
+        --eval-episodes 40
+
+Có thể trỏ vào final_model.zip:
+
+    ros2 run social_rl train_rl \
+        --eval ~/social_rl_runs/<run>/final_model.zip \
+        --eval-episodes 40
+
+Hoặc trỏ thẳng vào thư mục run (tự lấy final_model.zip, hoặc checkpoint mới
+nhất nếu không có):
+
+    ros2 run social_rl train_rl --eval ~/social_rl_runs/<run> --eval-episodes 40
+
+--eval và --resume KHÔNG được dùng cùng lúc.
+
+Kết quả CHỈ in ra terminal (stdout), KHÔNG tự ghi file nào. Muốn giữ lại thì
+tự pipe qua tee:
+
+    ros2 run social_rl train_rl --eval <...> --eval-episodes 40 | tee ~/eval_ten.txt
+
+In ra 2 phần:
+    - mỗi tập một dòng, in ngay khi tập đó chạy xong (outcome, scenario,
+      steps, return, intrusion, closest...)
+    - cuối cùng một bảng tổng kết: outcome/goal|hit_obstacle|timeout (%),
+      social/peak_intrusion, social/peak_unseen, social/clear_episodes (%),
+      mean closest (quan sát được / TRUE), tách riêng theo từng scenario, và
+      bảng "CHECKPOINT ACCEPTANCE" 4 tiêu chí PASS/FAIL kèm VERDICT cuối:
+          peak_unseen - peak_intrusion  < 0.10
+          clear episodes                > 60%
+          mean closest, TRUE            > 0.60 m
+          none goal                     > 90%
+      (xem hàm report_evaluation() / evaluation_acceptance() trong train.py
+      nếu cần đổi ngưỡng - đừng đổi tuỳ tiện, đây là tiêu chí nghiệm thu
+      chính thức ghi trong CLAUDE.md).
+
+===============================================================================
+ output_root - MỖI NGƯỜI CÓ CẦN TỰ TẠO FOLDER KHÔNG?
+===============================================================================
+
+KHÔNG. train.py tự tạo thư mục:
+
+    output_root = os.path.expanduser(train_config.get('output_root', '~/social_rl_runs'))
+    run_dir = args.run_dir or os.path.join(output_root, datetime.now().strftime('%Y%m%d_%H%M%S'))
+    os.makedirs(run_dir, exist_ok=True)
+
+- `output_root` mặc định là `~/social_rl_runs` (đọc từ train: trong
+  rl_train.yaml) - `~` được expanduser theo ĐÚNG user đang chạy, không hard-code
+  đường dẫn ai cả, nên máy người khác chạy ra đúng
+  /home/<user_của_họ>/social_rl_runs.
+- Mỗi lần train tạo một thư mục con đặt tên theo timestamp
+  (YYYYMMDD_HHMMSS), os.makedirs tự tạo luôn cả output_root nếu chưa có.
+- Người khác chỉ cần source workspace rồi chạy lệnh mục 1/2 ở trên - không cần
+  mkdir tay trước.
