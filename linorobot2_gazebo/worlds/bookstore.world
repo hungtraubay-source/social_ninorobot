@@ -405,6 +405,9 @@
         <pose frame="">2.902979 -4.760748 0.75826 0.003450 0.000006 -0.002250</pose>
 	</model> -->
 
+	<!-- BookD_01_002, BookF_01_003: xoá 15-09-2026 (đã tắt tay trong Gazebo
+	đang chạy trước) - world (-4.51,-1.31) và (-4.60,-4.77), ngoài phạm vi
+	start/goal train (x=0-4.5m).
 	<model name="BookD_01_002">
         <include>
             <uri>model://aws_robomaker_retail_BookD_01</uri>
@@ -417,7 +420,7 @@
             <uri>model://aws_robomaker_retail_BookF_01</uri>
         </include>
         <pose frame="">-4.604931 -4.772141 0.804483 0.000004 0 0</pose>
-	</model>
+	</model> -->
 
 	<!-- <model name="BookD_01_003">
         <include>
@@ -447,19 +450,25 @@
         <pose frame="">3.430611 0.856469 1.038157 0.000008 0 1.580378</pose>
 	</model> -->
              
+       <!-- BookshelfA_01_001: xoá 15-09-2026 (đã tắt tay trong Gazebo đang
+       chạy trước) - vị trí world (1.405, -1.450) ~ map (4.41, 0.55), sát
+       goal (4.5, 0.8) trong rl_train.yaml, người talking hay bị spawn chèn
+       vào đây.
        <model name="BookshelfA_01_001">
         <include>
             <uri>model://aws_robomaker_retail_BookshelfA_01</uri>
         </include>
         <pose frame="">1.405153 -1.449740 0.03755 0.003490 -0.000003 0.000696</pose>
-	</model>
+	</model> -->
 
 	<model name="BookshelfA_01_002">
         <include>
             <uri>model://aws_robomaker_retail_BookshelfA_01</uri>
         </include>
-        <pose frame="">1.405153 -4.761649 0.003411 0 0 0</pose>
-	</model> 
+        <!-- 15-09-2026: dịch tay trong Gazebo đang chạy, cập nhật khớp lại,
+        theo yêu cầu. Pose cũ: 1.405153 -4.761649 0.003411 0 0 0 -->
+        <pose frame="">1.405153 -2.566638 0.003411 0 0 0</pose>
+	</model>
 
 	<!-- <model name="BookshelfA_01_004">
         <include>
@@ -542,14 +551,18 @@
         <include>
             <uri>model://aws_robomaker_retail_BookshelfC_01</uri>
         </include>
-        <pose frame="">-4.517110 -1.310229 0.045908 0 0 0</pose>
+        <!-- 15-09-2026: dịch tay trong Gazebo đang chạy, cập nhật khớp lại,
+        theo yêu cầu. Pose cũ: -4.517110 -1.310229 0.045908 0 0 0 -->
+        <pose frame="">-4.517110 1.465533 0.045908 0 0 0</pose>
 	</model>
 
 	<model name="BookshelfC_01_004">
         <include>
             <uri>model://aws_robomaker_retail_BookshelfC_01</uri>
         </include>
-        <pose frame="">-4.614360 -4.761649 0.045908 0 0 0</pose>
+        <!-- 15-09-2026: dịch tay trong Gazebo đang chạy, cập nhật khớp lại,
+        theo yêu cầu. Pose cũ: -4.614360 -4.761649 0.045908 0 0 0 -->
+        <pose frame="">-4.614360 -3.853752 0.045908 0 0 0</pose>
 	</model>
 
 

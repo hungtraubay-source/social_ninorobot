@@ -494,13 +494,55 @@ env:
   # rơi vào đúng kịch bản "học tệ hơn" chứ không phải "học né". Về 3:1:1:1
   # (`none` 50%, giữa 67% và 25%) làm bước đệm, cùng với tăng social_penalty
   # bên dưới để phần thưởng né mạnh hơn ngay cả khi tập có người ít gặp hơn.
+  # --- 12-09-2026: G2a, kiến trúc mới (bỏ dự đoán + Gaussian + reward theo
+  # báo cáo) - fork từ checkpoint G1 (chỉ `none`, học lái/quay đầu/né vật cản).
+  # Mọi lịch sử 4 kịch bản (1:1:1:1, 6:1:1:1...) phía trên là của kiến trúc CŨ
+  # (5 kênh K_soc dự báo), KHÔNG resume được sang đây - xem RUN_RL.txt.
+  #
+  # 13-09-2026: tăng lên 65% none / 35% talking (13:7, ước lượng nguyên gần
+  # nhất của 65:35 = 13:7 sau khi rút gọn theo GCD 5) theo yêu cầu, sau khi
+  # --eval 20 tập deterministic ở 80/20 cho none_goal 47.1% -> 61.1% qua hai
+  # đợt resume (77500 -> 147500) và hit_obstacle đã về 0% - nút thắt giờ là
+  # timeout, không còn là va chạm, nên tăng tỉ lệ talking để đẩy mạnh hơn tín
+  # hiệu K_soc mà không nhảy thẳng lên 1:1:1:1 (bài học 05-09-2026 phía trên:
+  # tăng tỉ lệ người quá đột ngột làm policy học tệ đi trước khi học né).
+  #
+  # 65/35 -> 50/50 (14-09-2026, theo yêu cầu). Resume từ checkpoint 125000
+  # (run 20260914_073223) - --eval 40 tập deterministic: goal 85.0%,
+  # hit_obstacle 0.0%, tốt nhất trong các checkpoint đã đo ở nhánh này. Tăng
+  # tỉ lệ talking lên một nấc nữa (không nhảy thẳng 1:1:1:1 kiểu 4 kịch bản
+  # cũ vì hiện chỉ có 2 kịch bản none/talking, 50/50 đã là mức đặc nhất còn
+  # lại trước khi đảo tỷ lệ sang phía talking nhiều hơn none).
+  #
+  # 50/50 -> 65/35 (14-09-2026, theo yêu cầu, TRẢ VỀ). Nhánh 50/50 (run
+  # 20260914_120920, ent_coef 0.0003) --eval 40 tập cả ba checkpoint
+  # (127500/142500/170000) đều THUA checkpoint xuất phát 125000 trên cả
+  # outcome/goal (65-75% so với 85%) lẫn none_goal (64.7-71.4% so với
+  # 85.7%) - không có bằng chứng 50/50 giúp gì, và hai biến (scenario +
+  # ent_coef) đổi cùng lúc nên không tách được cái nào gây tụt. Trả
+  # scenarios về đúng 65/35 (13:7) để cô lập biến, chỉ còn ent_coef
+  # 0.0003->0.001 là thay đổi duy nhất cho lần resume tiếp theo từ 125000.
+  #
+  # 65/35 -> 55/45 (14-09-2026, theo yêu cầu). Nhánh 65/35+ent_coef 0.001
+  # (run 20260914_155442) cũng THUA 125000 (final_model/150000/142500 đều
+  # goal 75-77.5% so với 85%) - ent_coef=0.001 đã bị loại hai lần (xem đoạn
+  # ent_coef phía dưới, trả về 0.0005). Lần này CHỈ đổi scenarios, giữ
+  # ent_coef đúng mức đã train ra 125000, để biết riêng tỉ lệ talking cao
+  # hơn có tự nó giúp/hại hay không - chưa từng đo sạch một biến này. Tăng
+  # từng nấc (55/45, tỉ lệ 11:9) thay vì nhảy lại 50/50, đúng bài học
+  # 05-09-2026: tăng đột ngột dễ "học tệ hơn" chứ chưa chắc "học né".
+  #
+  # 55/45 -> 80/20 (15-09-2026, theo yêu cầu, train lại TỪ ĐẦU). Kiến trúc
+  # đổi (d0/talking/progress_gain), train lại từ trọng số ngẫu nhiên - quay
+  # về đúng chủ trương "học lái trước, học né vật tĩnh trước, học né xã hội
+  # sau" (GIAI ĐOẠN C cũ): `none` chiếm đa số ngay từ đầu thay vì áp tỉ lệ đã
+  # tối ưu cho fine-tune một checkpoint biết lái sẵn.
   scenarios:
     - none
     - none
     - none
+    - none
     - talking
-    - passing
-    - passing
   scenario_settle_time: 0.6
 
   # Toạ độ trong frame `map` (robot spawn ở world (-3, -2) nên map = world + 3, +2).
@@ -600,7 +642,13 @@ observation:
     # Khoảng cách cá nhân cơ sở d0, và hệ số nở theo độ tin cậy tình huống:
     # factor = 1 + expansion_a * (1 - scene_confidence). Ground-truth luôn cho
     # confidence 1.0 nên factor = 1.0 khi train từ Gazebo.
-    d0: 0.5
+    #
+    # 0.5 -> 0.8 (15-09-2026, theo yêu cầu). Cùng lúc constraint_field.py đổi
+    # công thức: base (1 người) sigma = d0/2 thay vì d0, talking (cặp) chia 3
+    # thay vì chia 4. d0 dùng chung cho MỌI scene_type (base/passing/waiting/
+    # talking) nên đổi số này phình to hết các loại vùng, không riêng gì một
+    # loại - xem constraint_field.py để có công thức đầy đủ theo từng nhánh.
+    d0: 0.8
     expansion_a: 0.5
     # Sigma phía trước nở theo tốc độ người đi: sigma_h = factor*(d0 + speed_gain_k*speed).
     speed_gain_k: 0.5
@@ -689,7 +737,17 @@ reward:
   #
   # 40.0 -> 4.0 (11-09-2026) -> 2.0 (12-09-2026, chia tiếp 1/2 theo R_g mới):
   # vẫn đúng 1/5 goal_reward (10.0), tỉ lệ dẫn đường không đổi.
-  progress_gain: 2.0
+  #
+  # 2.0 -> 3.0 (15-09-2026, theo yêu cầu, PHÁ tỉ lệ 1/5 CÓ CHỦ ĐÍCH). Train lại
+  # từ đầu trên kiến trúc d0 mới; muốn robot ưu tiên học đi tới đích trước, né
+  # vật tĩnh sau, né vùng xã hội sau cùng - đẩy 3/10 goal_reward thay vì 2/10.
+  # Route trung bình 3.18-5.80 m (giữa ~4.4 m): tổng progress một tập thành
+  # công ~3.0*4.4=13.2, CỘNG goal_reward 10.0 = ~23.2 - lớn hơn hẳn
+  # |obstacle_collision_penalty| (-10), nên mất tất cả vì một cú đâm giờ ĐẮT
+  # hơn trước (giá trị một tập trót lọt cao hơn), không phải rẻ hơn - tăng
+  # progress_gain kiểu này không mở lại đường "lao ẩu cho nhanh". CHƯA đo qua
+  # --eval, xem lại nếu goal vẫn không lên hoặc hit_obstacle bật lại.
+  progress_gain: 3.0
   # Charged mỗi step, đây là thứ khiến đứng yên/lượn lờ tốn tiền.
   #
   # -0.8 -> -0.08 (11-09-2026) -> -0.04 (12-09-2026, chia tiếp 1/2). Kiểm tra
@@ -750,7 +808,7 @@ train:
   # nền đã thạo; nếu none_goal phẳng > 0.90 trước đó thì DỪNG (checkpoint_every
   # 2500). none_goal không hồi sau ~30k -> hạ learning_rate 3e-4 -> 1e-4, resume
   # LẠI từ chính 100k chứ không từ run 1b hỏng.
-  total_timesteps: 80000
+  total_timesteps: 100000
   # GIAI ĐOẠN 2: 512 -> 2048. Với 4 kịch bản bốc đều, n_steps 512 chỉ chứa
   # 2.2 tập (ep_len 233, run 164308) tới 3.0 tập (ep_len 171, run 222950) mỗi
   # lần cập nhật, nên XÁC SUẤT một rollout thấy đủ cả 4 kịch bản BẰNG 0%.
@@ -812,7 +870,40 @@ train:
   # (~127.5k) để consolidate. Nếu none_goal vẫn < 0.70 sau ~30k thì lỗi nằm ở
   # sampling (yaw start đều 360, nửa số tập `none` không phải bài học xoay),
   # không phải LR - khi đó thiên yaw về |lệch| > 90 độ.
-  learning_rate: 0.0001
+  #
+  # 1e-4 -> 3e-4 (12-09-2026, theo yêu cầu). Đây là lần train TỪ ĐẦU trên kiến
+  # trúc mới (bỏ dự đoán + Gaussian + reward theo báo cáo), không phải resume
+  # fine-tune một checkpoint đã gần đỉnh như lần đo ở trên - 3e-4 vốn là mặc
+  # định của dự án, chỉ bị hạ vì lý do fine-tune-quá-mạnh SAU khi đạt đỉnh.
+  #
+  # 3e-4 -> 1e-4 (13-09-2026). Đúng chữ ký cũ lặp lại: run 20260913_061254
+  # (resume 147500, đổi tỉ lệ 65/35 none/talking) đạt đỉnh ep_rew_mean 9.468 /
+  # none_goal 0.80-0.83 ở step 157372, kèm approx_kl spike 0.472 (9.4x
+  # target_kl) NGAY tại đỉnh đó, rồi ep_rew_mean trượt 9.468 -> 6.143 qua ~25k
+  # step. Phục hồi tạm ở 186044-192188 (none_goal 0.92-1.00) rồi approx_kl
+  # spike lần hai (0.112 ở 194236) và sập lại (none_goal 0.462 ở 196284).
+  # --eval 20 tập deterministic trên checkpoint đỉnh phục hồi (191680) ra
+  # none_goal 53.8% - TỆ HƠN checkpoint xuất phát 147500 (61.1%), xác nhận 44k
+  # step vừa rồi là lùi ròng, không phải tiến. Về 1e-4, resume từ 147500 (đã
+  # qua --eval, không phải từ checkpoint bất ổn 191680).
+  #
+  # 1e-4 -> 3e-4 (13-09-2026, train lại TỪ ĐẦU). Lý do hạ xuống 1e-4 ở trên
+  # (chống overshoot khi FINE-TUNE một checkpoint đã gần đỉnh) không áp dụng
+  # cho weight ngẫu nhiên - chưa có đỉnh nào để overshoot qua. Về đúng mặc
+  # định 3e-4 đã dùng cho lần train từ đầu trước đó (run 20260912_182533).
+  #
+  # 3e-4 -> 1e-4 (14-09-2026, theo yêu cầu). Resume từ run 20260913_235941
+  # (100k step, 3e-4/ent_coef 0.001), checkpoint 97500 - --eval 40 tập
+  # deterministic FAIL none_goal (79.3%, cần >90%), ba tiêu chí xã hội đều
+  # PASS. Đây LẠI là fine-tune từ một checkpoint đã có đỉnh cục bộ, cùng tình
+  # huống đã ghi ở dòng 830 (3e-4 -> 1e-4) và 847, không phải train từ trọng
+  # số ngẫu nhiên - hạ lr theo đúng mẫu đã lặp lại hai lần trước.
+  #
+  # 1e-4 -> 3e-4 (15-09-2026, theo yêu cầu, train lại TỪ ĐẦU). Đổi công thức
+  # d0/talking + progress_gain, checkpoint cũ không resume được nữa (khác
+  # kích thước/ý nghĩa quan sát) - đúng tình huống "trọng số ngẫu nhiên" như
+  # 12-09-2026 và 13-09-2026 phía trên, về lại mặc định 3e-4 của dự án.
+  learning_rate: 0.0003
   gamma: 0.99
   gae_lambda: 0.95
   clip_range: 0.2
@@ -823,6 +914,76 @@ train:
   # policy_gradient_loss chỉ khoảng -0.005: thưởng entropy đang lấn át gradient
   # policy, nên log_std không co lại được. Trả về 0.005 khi sang giai đoạn 2
   # nếu policy không còn thử hướng né nào khác.
+  #
+  # 0.001 -> 0.0003 (13-09-2026). CÙNG BỆNH LẶP LẠI ở ent_coef=0.001: run
+  # 20260913_162723 (resume 217500, 43k step) train/std đi từ 0.890 xuống
+  # 0.860 - gần như đứng yên. entropy_loss quanh -2.54, ent_coef*entropy_loss
+  # = 0.0025, trong khi policy_gradient_loss đo được chỉ 0.002-0.023 - CÙNG
+  # BẬC, entropy vẫn lấn át. std=0.86-0.89 trên [-1,1] nghĩa là lệnh gửi
+  # xuống robot vẫn bị nhiễu +-0.86-0.89 đè lên, gần hết cả biên độ điều
+  # khiển. Hệ quả đo qua log thật (không phải TensorBoard): outcome/goal kẹt
+  # 0.61-0.84 suốt 356 tập (rolling n=50), goal RIÊNG BIỆT y hệt nhau giữa
+  # none (73.2%) và talking (70.6%) - xác nhận đây là vấn đề Ở TẦNG NHIỄU
+  # HÀNH ĐỘNG, không phải né người/né vật cản, vì nếu là vấn đề xã hội thì
+  # hai kịch bản đã lệch nhau. outcome/timeout (23-24% cả hai loại) là nút
+  # thắt, không phải hit_obstacle (3-6%) - nhiễu lớn gây zigzag/tốn bước chứ
+  # chưa đủ gây va chạm. Hạ tiếp xuống 0.0003 để entropy không còn cùng bậc
+  # với policy_gradient_loss.
+  #
+  # ĐÍNH CHÍNH (13-09-2026): giả thuyết "std cao chặn goal lên" ở trên có lỗ
+  # hổng - dòng 669 (giai đoạn C, kiến trúc CŨ) đã ghi rõ "BỎ TIÊU CHÍ
+  # train/std <= 0.6 - nó SAI. Run 20260829_222950 kết thúc với std 0.964,
+  # gần như không co, mà vẫn về đích 88% ở none." Không lấy std làm mục tiêu
+  # hay tiêu chí nghiệm thu; chỉ đọc outcome/goal, none_goal qua --eval hoặc
+  # log thật. 0.001 -> 0.0003 -> 0.001 (14-09-2026, theo yêu cầu): train lại
+  # TỪ ĐẦU, không phải resume - ent_coef thấp lúc weight còn ngẫu nhiên có
+  # nguy cơ log_std co quá sớm, robot chưa kịp khám phá đường tới đích đã hết
+  # tò mò (đúng lỗi đã hỏng run 20260827_013703). Dùng lại 0.001, mức đã
+  # dùng cho lần train từ đầu gần nhất trên kiến trúc này (20260912_182533).
+  #
+  # 0.001 -> 0.0005 (14-09-2026, theo yêu cầu). Cùng lần resume từ checkpoint
+  # 97500 nói ở learning_rate phía trên - trọng số không còn ngẫu nhiên nên
+  # rủi ro "co entropy quá sớm" của đoạn ghi chú 14-09-2026 ở trên không áp
+  # dụng ở đây; hạ theo cùng logic đã dùng cho GIAI ĐOẠN C và 13-09-2026: bớt
+  # áp lực entropy khi resume fine-tune, chưa hạ hẳn về 0.0003 đã thử hỏng.
+  #
+  # 0.0005 -> 0.001 (14-09-2026, theo yêu cầu, RÚT LẠI ngay sau đó). Ý định
+  # ban đầu là nới entropy để "khám phá học né" khi scenarios lên 50/50 -
+  # nhưng đây là resume, không phải train từ trọng số ngẫu nhiên, nên đúng
+  # cảnh báo đã ghi ở đoạn 0.001->0.0003 phía trên (run 20260913_162723):
+  # ent_coef=0.001 lúc fine-tune làm entropy lấn át policy_gradient_loss,
+  # std đứng yên, outcome/goal kẹt, timeout thành nút thắt - không phải học
+  # né tốt hơn. Về 0.0003 (14-09-2026, theo yêu cầu), mức đã dùng khi sửa
+  # đúng lỗi này lần trước.
+  #
+  # 0.0003 -> 0.001 (14-09-2026, theo yêu cầu). Run 20260914_120920 (resume
+  # 125000, 0.0003, scenarios 50/50, 43k/50k step trước khi dừng tay): goal
+  # tụt thật giữa nửa đầu và nửa sau (74% -> 64% theo tensorboard),
+  # hit_obstacle trôi ngược từ 0% lên lại 10-15%, ep_rew_mean 9.7 -> 7.9.
+  # KHÁC dấu hiệu lần 0.001 hỏng trước: `train/std` vẫn giảm đều suốt run
+  # (không đứng khựng), còn `policy_gradient_loss` gần như 0 và đổi dấu liên
+  # tục quanh 0.000x - đọc là exploration co lại nhanh hơn tốc độ cải thiện
+  # thật, có thể đã hội tụ sớm vào một hành vi tầm trung. CẢNH BÁO: nới lại
+  # 0.001 đứng trước đúng rủi ro đã đo ở đoạn 0.001->0.0003 phía trên
+  # (entropy cùng bậc với policy_gradient_loss vốn đã rất nhỏ ở đây) - theo
+  # dõi entropy_loss*ent_coef so với policy_gradient_loss và train/std ở
+  # 10-15 update đầu sau resume; std đứng khựng lại là dấu hiệu lặp lại lỗi
+  # cũ, không phải đang khám phá tốt hơn.
+  #
+  # 0.001 -> 0.0005 (14-09-2026, theo yêu cầu, TRẢ VỀ). --eval 40 tập run
+  # 20260914_155442 (resume 125000, 65/35, ent_coef 0.001, đủ 50k step):
+  # final_model/150000/142500 đều goal 75-77.5%, THUA baseline 125000 (85%).
+  # Hai lần thử ent_coef=0.001 (kèm 50/50 rồi kèm 65/35) đều tụt so với
+  # 125000 - đủ bằng chứng để không thử tiếp ở mức này. Về đúng 0.0005, mức
+  # đã train ra 125000, để cô lập biến scenario (65/35 -> 55/45) trong lần
+  # resume tiếp theo.
+  #
+  # 0.0005 -> 0.001 (15-09-2026, theo yêu cầu, train lại TỪ ĐẦU). Cả hai lần
+  # 0.001 hỏng ở trên đều là RESUME/fine-tune một checkpoint đã hội tụ một
+  # phần - cảnh báo đó không áp dụng cho trọng số ngẫu nhiên (đúng phân biệt
+  # đã ghi nhiều lần trong file này: GIAI ĐOẠN C, 12-09-2026, 14-09-2026).
+  # d0/talking/progress_gain đổi nên đây chắc chắn là train từ đầu, không
+  # phải resume trá hình - 0.001 là mức đúng cho tình huống này.
   ent_coef: 0.001
   vf_coef: 0.5
   max_grad_norm: 0.5

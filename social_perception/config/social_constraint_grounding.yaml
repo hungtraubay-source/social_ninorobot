@@ -25,11 +25,13 @@ social_constraint_grounding:
 
     # Crossing: sigma_h=[1+a*(1-c)]*(d0+k*vh), sigma_s=sigma_r=sigma_h/3.
     # vh=norm(Block-B velocity_mps), m/s; c is fixed for this experiment.
-    # At vh=1 m/s: sigma_h=1.05 m, sigma_s=sigma_r=0.35 m.
-    # Talking pair: sigma_h=sigma_r=[1+a*(1-c)]*(sep+d0)/4, sigma_s=sigma_h/3.
+    # At vh=1 m/s: sigma_h=1.313 m, sigma_s=sigma_r=0.438 m.
+    # Talking pair: sigma_h=sigma_r=[1+a*(1-c)]*(sep+d0)/3, sigma_s=sigma_h/3.
     # sep is full centre-to-centre distance in metres. For sep=1.5 m:
-    # h=r=0.505 m, s=0.168 m; outer 15% contour is ~1.97 x 0.66 m.
-    gaussian_d0_m: 0.5
+    # h=r=0.774 m, s=0.258 m; outer 15% contour is ~3.02 x 1.01 m.
+    # (15-09-2026: d0 0.5->0.8, talking divisor 4->3, theo yêu cầu - đồng bộ
+    # social_rl/config/rl_train.yaml + constraint_field.py bên train.)
+    gaussian_d0_m: 0.8
     gaussian_a: 0.1
     gaussian_c: 0.9
     gaussian_k_s: 0.5
@@ -57,7 +59,8 @@ social_constraint_grounding:
     # ``stationary`` is one person with a fixed circular Gaussian.  It is
     # separate from ``standing`` because it does not depend on the bookshelf.
     # Unit: metres; sigma_h=sigma_r=sigma_s=stationary_sigma_m.
-    stationary_sigma_m: 0.5
+    # 15-09-2026: 0.5 -> 0.4, đồng bộ d0/2 bên train (d0 giờ 0.8).
+    stationary_sigma_m: 0.4
     social_weight_stationary: 0.5
     social_weight_crossing: 0.5
     # ``standing`` object pose, metres in the same expected_frame as Block B.

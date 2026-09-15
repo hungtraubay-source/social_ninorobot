@@ -12,9 +12,12 @@ are that node's, and the report they both come from:
     passing   (one moving person)     sigma_h = factor * (d0 + k * speed)
                                       sigma_s = sigma_r = sigma_h / 3
                                       centre = person, orientation = velocity
-    talking   (a face-to-face pair)   sigma_h = sigma_r = factor * (sep + d0)/4
+    talking   (a face-to-face pair)   sigma_h = sigma_r = factor * (sep + d0)/3
                                       sigma_s = sigma_h / 3
                                       centre = midpoint, orientation = pair axis
+                                      (15-09-2026: /4 -> /3, theo yêu cầu --
+                                      xem RUN_RL.txt/lịch sử sửa ngày này cho
+                                      lý do)
     waiting   (person facing object)  sigma_h = factor * (d_obj + d0)/2
                                       sigma_s = sigma_r = sigma_h / 3
                                       centre = person, orientation = person's
@@ -22,7 +25,9 @@ are that node's, and the report they both come from:
                                       (11-09-2026) -- a tuned constant, not a
                                       measured distance to a real object; see
                                       compile_zones.
-    base      (one still person)      sigma_h = sigma_s = sigma_r = d0, circular
+    base      (one still person)      sigma_h = sigma_s = sigma_r = d0/2,
+                                      circular (15-09-2026: was d0, theo
+                                      yêu cầu)
 
 The field VALUE at a point is an anisotropic Gaussian, split front/rear:
 
@@ -155,7 +160,9 @@ def _passing_sigmas(speed: float, factor: float, config: ConstraintFieldConfig):
 
 def _talking_sigmas(separation: float, factor: float,
                     config: ConstraintFieldConfig):
-    sigma_h = factor * ((separation + config.d0) / 4.0)
+    # 15-09-2026: /4 -> /3, theo yêu cầu -- ellipse dọc trục cặp lớn hơn,
+    # xem RUN_RL.txt.
+    sigma_h = factor * ((separation + config.d0) / 3.0)
     return sigma_h, sigma_h / 3.0, sigma_h
 
 
@@ -167,7 +174,9 @@ def _waiting_sigmas(d_obj: float, factor: float,
 
 
 def _base_sigmas(config: ConstraintFieldConfig):
-    return config.d0, config.d0, config.d0
+    # 15-09-2026: d0 -> d0/2, theo yêu cầu.
+    half = config.d0 / 2.0
+    return half, half, half
 
 
 def _gaussian_region(x, y, centre_x, centre_y, orientation,
