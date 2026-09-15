@@ -1,7 +1,7 @@
 """Vẽ K_soc của khối D ra RViz. Chỉ để NHÌN, không nằm trong vòng điều khiển.
 
     /social_gt/people, /animated_people/scenario  ->  compile_zones()  ->
-        /social_rl/zone_markers   (MarkerArray, một ellipse 1-sigma + nhãn mỗi zone)
+        /social_rl/zone_markers   (MarkerArray, nhiều đường đồng mức + nhãn mỗi zone)
         /social_rl/social_costmap (OccupancyGrid, render_zones() y hệt CNN ăn)
 
 11-09-2026, VIẾT LẠI HOÀN TOÀN. Bản cũ nghe message `social_perception/msg/
@@ -22,10 +22,14 @@ nào tồn tại: publish thẳng trong frame `world`, dựa vào cạnh TF worl
 gazebo.launch.py đã publish sẵn để xem chồng lên map trong RViz (Fixed Frame:
 map hoặc world đều được).
 
-Gaussian không có biên cứng nên MarkerArray chỉ vẽ một ellipse ở bán kính
-1-sigma để có hình dạng tham khảo (KHÔNG phải "trong đó ăn đủ tiền, ngoài đó
-miễn phí" như bản ramp cũ) -- OccupancyGrid mới là bản đúng giá trị liên tục,
-và cũng đúng là thứ CNN của policy ăn, chỉ khác độ phân giải.
+Gaussian không có biên cứng nên một đường 1-sigma trông nhỏ hơn hẳn cảm giác
+"vùng bao quanh người" -- so ra thì social_constraint_grounding.py (node
+deploy thật trên robot) vẽ NHIỀU đường đồng mức (`contour_levels`, mặc định
+[0.90, 0.75, 0.60, 0.45, 0.30, 0.15], tỉ lệ so với đỉnh weight của chính zone
+đó) ra tới tận 15% đỉnh, rộng hơn nhiều. Vẽ lại giống vậy ở đây (14-09-2026)
+để hai chỗ nhìn khớp nhau -- công thức field và giá trị dùng train/reward
+KHÔNG đổi, đây chỉ là thêm đường tham khảo. OccupancyGrid mới là bản đúng giá
+trị liên tục, và cũng đúng là thứ CNN của policy ăn, chỉ khác độ phân giải.
 """
 import math
 import traceback
@@ -33,6 +37,7 @@ import traceback
 import numpy as np
 import rclpy
 from ament_index_python.packages import get_package_share_directory
+from gazebo_msgs.msg import ModelStates
 from geometry_msgs.msg import Point
 from nav_msgs.msg import OccupancyGrid
 from rclpy.node import Node
@@ -45,6 +50,7 @@ import yaml
 from social_rl.constraint_field import ConstraintFieldConfig, compile_zones, render_zones
 from social_rl.ground_truth import _SCENARIO_SCENE_TYPE, _yaw
 from social_rl.observation import RelativeEntity
+from social_rl.ros_interface import EnvConfig, visible_to_camera
 
 SEGMENTS = 72           # số điểm ellipse tham khảo mỗi zone
 WEIGHT_COLOUR = {        # màu theo scene_type, chỉ để phân biệt bằng mắt
@@ -95,6 +101,16 @@ class ZoneMarkers(Node):
         self.declare_parameter('grid_center_y', 0.0)
         self.declare_parameter('grid_range', 4.0)     # nửa cạnh hộp, mét
         self.declare_parameter('grid_resolution', 0.10)
+        # Khớp mặc định social_constraint_grounding.yaml (node deploy thật) để
+        # hai nơi vẽ giống nhau. Tỉ lệ so với đỉnh weight của chính zone đó,
+        # KHÔNG phải giá trị field tuyệt đối -- level=0.15 nghĩa là "15% đỉnh
+        # của zone này", không phải "field=0.15".
+        self.declare_parameter(
+            'contour_levels', [0.90, 0.75, 0.60, 0.45, 0.30, 0.15])
+        # Mặc định TRUE, khớp env.people_camera_only lúc train (86 độ, 12 m) -
+        # trước đây node này vẽ thẳng /social_gt/people không lọc gì, nên vùng
+        # hiện cả khi camera không quay tới người, khác hẳn thứ policy thấy.
+        self.declare_parameter('camera_only', True)
 
         people_topic = str(self.get_parameter('people_topic').value)
         scenario_topic = str(self.get_parameter('scenario_topic').value)
@@ -104,6 +120,13 @@ class ZoneMarkers(Node):
         self.grid_cx = float(self.get_parameter('grid_center_x').value)
         self.grid_cy = float(self.get_parameter('grid_center_y').value)
 
+        levels = [float(level) for level in
+                 self.get_parameter('contour_levels').value]
+        if not levels or any(not 0.0 < level < 1.0 for level in levels):
+            raise ValueError(
+                'contour_levels must contain finite fractions between 0 and 1')
+        self.contour_levels = sorted(set(levels), reverse=True)
+
         config_path = str(self.get_parameter('env_config').value)
         if not config_path:
             config_path = (get_package_share_directory('social_rl')
@@ -112,6 +135,9 @@ class ZoneMarkers(Node):
             saved = yaml.safe_load(handle) or {}
         self.cfg = ConstraintFieldConfig.from_dict(
             (saved.get('observation') or {}).get('constraint_field') or {})
+        self.env_cfg = EnvConfig.from_dict(saved.get('env') or {})
+        self.camera_only = bool(self.get_parameter('camera_only').value)
+        self._robot_states = None
 
         cells = int(round(2.0 * grid_range / self.grid_resolution))
         offsets = (-grid_range + self.grid_resolution
@@ -126,6 +152,9 @@ class ZoneMarkers(Node):
             reliability=QoSReliabilityPolicy.RELIABLE,
             durability=QoSDurabilityPolicy.VOLATILE)
         self.create_subscription(People, people_topic, self._on_people, latest)
+        self.create_subscription(
+            ModelStates, self.env_cfg.model_states_topic,
+            self._on_model_states, latest)
         scenario_qos = QoSProfile(
             depth=1, history=QoSHistoryPolicy.KEEP_LAST,
             reliability=QoSReliabilityPolicy.RELIABLE,
@@ -140,11 +169,31 @@ class ZoneMarkers(Node):
             f'zone_markers: nghe {people_topic} + {scenario_topic}, vẽ K_soc '
             f'({self.cfg.d0=:.2f} d0, weights={self.cfg.weights}) quanh '
             f'({self.grid_cx:.1f}, {self.grid_cy:.1f}) frame `{self.frame_id}`, '
-            f'lưới {self.grid_cells}x{self.grid_cells} ô {self.grid_resolution} m/ô')
+            f'lưới {self.grid_cells}x{self.grid_cells} ô {self.grid_resolution} m/ô, '
+            f'camera_only={self.camera_only} (86 deg, {self.env_cfg.camera_max_range} m) '
+            f'qua {self.env_cfg.model_states_topic}')
 
     def _on_scenario(self, message: String):
         name = message.data.split()[0].strip().lower() if message.data else ''
         self._scene_type = _SCENARIO_SCENE_TYPE.get(name, self._scene_type)
+
+    def _on_model_states(self, message: ModelStates):
+        self._robot_states = message
+
+    def _robot_pose(self):
+        """(x, y, yaw) của robot trong frame `world`, hoặc None nếu chưa có.
+
+        Y hệt ground_truth.GroundTruthBridge.robot_pose() -- cùng topic, cùng
+        entity_name -- để lọc camera-cone ở đây khớp đúng thứ policy thấy lúc
+        train, không tự bịa một nguồn pose khác.
+        """
+        if self._robot_states is None:
+            return None
+        name = self.env_cfg.entity_name
+        if name not in self._robot_states.name:
+            return None
+        pose = self._robot_states.pose[self._robot_states.name.index(name)]
+        return (pose.position.x, pose.position.y, _yaw(pose.orientation))
 
     def _on_people(self, message: People):
         # 12-09-2026: bọc try/except CHỈ để LOG lỗi thật ra terminal, không che
@@ -155,8 +204,32 @@ class ZoneMarkers(Node):
         # đó publish lại ngay 17 Hz, không lỗi nào lặp lại - nguyên nhân gốc chưa
         # xác định được, log này để lần sau bắt được ngay tại chỗ.
         try:
+            # 15-09-2026: lọc camera cone trước khi dựng zone, khớp
+            # ground_truth.relative_people() lúc train -- trước đây node này
+            # vẽ thẳng TOÀN BỘ /social_gt/people không lọc gì, nên vùng hiện cả
+            # khi camera không quay tới người, khác thứ policy thực sự thấy.
+            # Toạ độ world giữ nguyên để vẽ đúng chỗ trên map; chỉ đổi sang
+            # local để mỗi việc kiểm tra góc/khoảng cách camera.
+            robot_pose = self._robot_pose() if self.camera_only else None
+            if self.camera_only and robot_pose is None:
+                # Chưa có /model_states thì chưa biết robot quay hướng nào -
+                # không vẽ gì còn hơn vẽ sai (coi mọi người là chưa thấy).
+                empty = compile_zones([], self.cfg, frame=self.frame_id)
+                self._publish_markers(empty)
+                self._publish_grid(empty)
+                return
+            robot_x, robot_y, robot_yaw = robot_pose or (0.0, 0.0, 0.0)
+            cos_yaw, sin_yaw = math.cos(robot_yaw), math.sin(robot_yaw)
+
             people = []
             for person in message.people:
+                if self.camera_only:
+                    dx = person.pose.position.x - robot_x
+                    dy = person.pose.position.y - robot_y
+                    local_x = cos_yaw * dx + sin_yaw * dy
+                    local_y = -sin_yaw * dx + cos_yaw * dy
+                    if not visible_to_camera(local_x, local_y, self.env_cfg):
+                        continue
                 people.append(RelativeEntity(
                     x=person.pose.position.x, y=person.pose.position.y,
                     vx=person.velocity.linear.x, vy=person.velocity.linear.y,
@@ -189,22 +262,30 @@ class ZoneMarkers(Node):
             colour = WEIGHT_COLOUR.get(zone.scene_type, WEIGHT_COLOUR[''])
             sample = zone.trajectory_of_zone[0]
 
-            edge = Marker()
-            edge.header.frame_id = self.frame_id
-            edge.ns = f'{zone.zone_id}/sigma1'
-            edge.id = marker_id
-            marker_id += 1
-            edge.type = Marker.LINE_STRIP
-            edge.action = Marker.ADD
-            edge.pose.orientation.w = 1.0
-            edge.scale.x = 0.03
-            edge.color.r, edge.color.g, edge.color.b = colour
-            edge.color.a = 0.9
-            for x, y in sigma_ellipse(sample):
-                p = Point()
-                p.x, p.y, p.z = float(x), float(y), 0.02
-                edge.points.append(p)
-            markers.markers.append(edge)
+            # Nhiều đường đồng mức, khớp social_constraint_grounding.py: level
+            # là tỉ lệ so với đỉnh weight của CHÍNH zone này, quy đổi sang bán
+            # kính bằng r = sigma * sqrt(-2*ln(level)) (đường tròn mức
+            # exp(-0.5*(r/sigma)^2) = level của Gaussian chuẩn). Đường ngoài
+            # cùng (level nhỏ nhất) vẽ đậm hơn để dễ thấy rìa.
+            for level_index, level in enumerate(self.contour_levels):
+                radius_sigma = math.sqrt(-2.0 * math.log(level))
+                edge = Marker()
+                edge.header.frame_id = self.frame_id
+                edge.ns = f'{zone.zone_id}/contour_{level:.2f}'
+                edge.id = marker_id
+                marker_id += 1
+                edge.type = Marker.LINE_STRIP
+                edge.action = Marker.ADD
+                edge.pose.orientation.w = 1.0
+                outermost = level_index == len(self.contour_levels) - 1
+                edge.scale.x = 0.03 if outermost else 0.015
+                edge.color.r, edge.color.g, edge.color.b = colour
+                edge.color.a = 0.9 if outermost else 0.5
+                for x, y in sigma_ellipse(sample, radius_sigma):
+                    p = Point()
+                    p.x, p.y, p.z = float(x), float(y), 0.02
+                    edge.points.append(p)
+                markers.markers.append(edge)
 
             label = Marker()
             label.header.frame_id = self.frame_id

@@ -984,8 +984,19 @@ private:
     // This is stage one of a curriculum. Once the policy has the direction
     // rule, widen back towards 0.0 so it also handles the pair blocking the
     // route head-on, which is the case it has to break the symmetry itself.
+    //
+    // 0.4-1.0 -> 0.7-0.9 (12-09-2026, requested for the none80/talking20
+    // phase: "robot luôn phải gặp vùng xã hội trên đường tới đích"). The
+    // measured table above says 0.8 m is the ONE point with 100% of episodes
+    // having a usable slope (vs 67% at 0.4 m, 72% at 1.2 m) -- narrowing to
+    // a tight band around it is the closest thing to "always" this geometry
+    // supports without reverting to 0.0 m, which the same measurement showed
+    // has NO gradient to learn from at all (6% usable, a flat plateau with a
+    // cliff). Not re-measured at this narrower band; if `talking` episodes
+    // start looking suspiciously easy or the pocket failure mode from the
+    // 31-08 note above reappears, widen back towards 0.4-1.0.
     const double side = (NextUniform(0.0, 1.0) < 0.5) ? 1.0 : -1.0;
-    RoutePoint(NextUniform(0.45, 0.8), side * NextUniform(0.4, 1.0),
+    RoutePoint(NextUniform(0.45, 0.8), side * NextUniform(0.7, 0.9),
       &centre_x, &centre_y);
     SpawnTalkingActor(
       "m_sweater",
