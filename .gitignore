@@ -6,3 +6,5 @@ install
 __pycache__/
 *.pyc
 .env
+
+CLAUDE.md
