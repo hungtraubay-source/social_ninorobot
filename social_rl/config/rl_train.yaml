@@ -537,11 +537,42 @@ env:
   # về đúng chủ trương "học lái trước, học né vật tĩnh trước, học né xã hội
   # sau" (GIAI ĐOẠN C cũ): `none` chiếm đa số ngay từ đầu thay vì áp tỉ lệ đã
   # tối ưu cho fine-tune một checkpoint biết lái sẵn.
+  #
+  # 80/20 -> 70/30 (16-09-2026, theo yêu cầu). Sau 130352 bước (train từ đầu
+  # 100k + resume thêm 30k), `scenario/none_goal` đã ổn định 74-88% qua toàn
+  # bộ 6 checkpoint đã --eval, vượt xa ngưỡng qua giai đoạn (>=0.6) - đúng lúc
+  # tăng talking theo curriculum. CHỈ đổi scenarios lần này, GIỮ NGUYÊN
+  # learning_rate (0.0003) - theo đúng bài học 14-09-2026 ở trên (đổi 2 biến
+  # cùng lúc thì không tách được cái nào gây tụt/tăng). Tăng một nấc vừa phải
+  # (70/30, không nhảy thẳng 60/40) vì bước 80->40 (gấp đôi) lớn hơn mọi bước
+  # tăng đã từng thử an toàn trong lịch sử file này (~10-15 điểm %/lần).
+  #
+  # 70/30 -> 55/45 (16-09-2026, theo yêu cầu). Sau 40000 bước ở 70/30 (run
+  # 20260916_123330, resume từ 143525/final_model.zip), --eval 30 tập
+  # deterministic checkpoint 125352 và 135352: none_goal 85.0%/86.4%,
+  # talking_goal 80.0%/87.5% - cả hai đều PASS 3/4 tiêu chí xã hội, chỉ còn
+  # thiếu none_goal (>90%). Tăng tiếp một nấc theo đúng nhịp curriculum, GIỮ
+  # NGUYÊN learning_rate để cô lập biến như mọi lần trước.
   scenarios:
     - none
     - none
     - none
     - none
+    - none
+    - none
+    - none
+    - none
+    - none
+    - none
+    - none
+    - talking
+    - talking
+    - talking
+    - talking
+    - talking
+    - talking
+    - talking
+    - talking
     - talking
   scenario_settle_time: 0.6
 
