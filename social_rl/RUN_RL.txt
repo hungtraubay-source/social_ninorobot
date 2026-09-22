@@ -2,20 +2,6 @@
  social_rl - HUẤN LUYỆN KHỐI E (Constraint-conditioned RL)
 ===============================================================================
 
-
-source install/setup.bash
-ros2 topic pub --once /animated_people/scenario std_msgs/msg/String "{data: talking}"
-ros2 topic pub --once /animated_people/scenario std_msgs/msg/String "{data: passing}"       # 50/50 crossing|approaching, nhãn "passing"
-ros2 topic pub --once /animated_people/scenario std_msgs/msg/String "{data: crossing}"      # hình học cắt ngang (nhãn vẫn "passing")
-ros2 topic pub --once /animated_people/scenario std_msgs/msg/String "{data: approaching}"   # hình học đối đầu   (nhãn vẫn "passing")
-ros2 topic pub --once /animated_people/scenario std_msgs/msg/String "{data: backs_turned}"
-ros2 topic pub --once /animated_people/scenario std_msgs/msg/String "{data: none}"        # dọn sạch
-
-while true; do
-  ros2 topic pub -t 3 /animated_people/scenario std_msgs/msg/String "{data: passing}" >/dev/null
-  sleep 7
-done
-
 Nhiệm vụ: robot đi tới đích mà không vi phạm trường ràng buộc xã hội K_soc do
 khối D dựng ra. Không chỉ là "né người": chen vào giữa hai người ĐANG NÓI
 CHUYỆN phải đắt hơn hẳn đi ngang sau lưng hai người ĐANG QUAY LƯNG lại, dù

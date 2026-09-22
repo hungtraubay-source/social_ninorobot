@@ -494,7 +494,21 @@ def main():
                         help='sample actions instead of taking the mean. The '
                              'default is deterministic, which is what '
                              'rl_agent.yaml runs on the robot')
+    parser.add_argument('--eval-talking-offset', type=float, nargs=2,
+                        default=None, metavar=('LO', 'HI'),
+                        help='EVAL ONLY: force the `talking` pair\'s lateral '
+                             'offset from the route to this band instead of '
+                             'the trained [0.0, 0.4] (animated_people_release.'
+                             'cpp). "0 0" plants the pair dead-centre on the '
+                             'route -- the worst case for checking whether '
+                             'the policy actually detours, not just drives '
+                             'near the randomised training band. Requires '
+                             '--eval; never touches rl_train.yaml or a '
+                             'training run')
     args, ros_args = parser.parse_known_args()
+    if args.eval_talking_offset and not args.eval:
+        raise RuntimeError('--eval-talking-offset only makes sense with '
+                           '--eval; it does not apply to training')
 
     config = load_config(args.config)
     env_config = EnvConfig.from_dict(config.get('env', {}))
@@ -516,6 +530,9 @@ def main():
     if args.render:
         env_config = replace(
             env_config, render=args.render.lower() in ('true', '1', 'yes', 'on'))
+    if args.eval_talking_offset:
+        env_config = replace(
+            env_config, talking_offset_override=tuple(args.eval_talking_offset))
 
     device = resolve_device(str(train_config.get('device', 'cuda:0')))
     if args.eval:

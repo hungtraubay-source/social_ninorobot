@@ -995,8 +995,47 @@ private:
     // cliff). Not re-measured at this narrower band; if `talking` episodes
     // start looking suspiciously easy or the pocket failure mode from the
     // 31-08 note above reappears, widen back towards 0.4-1.0.
+    //
+    // 0.7-0.9 -> 0.3-0.5 (16-09-2026, theo yêu cầu, để robot CHẮC CHẮN gặp
+    // người trên đường tới đích). CẢNH BÁO: đi NGƯỢC với số đo ở trên -- bảng
+    // đo chỉ có 0.0/0.4/0.8/1.2/1.6/2.0, không có điểm nào ở 0.3-0.5, nhưng
+    // nội suy giữa 0.0 m (6% usable) và 0.4 m (67% usable) thì dải này nhiều
+    // khả năng THẤP HƠN 67%, tức đường dốc để học né MỜ hơn hẳn so với 0.8 m
+    // (100%) đang dùng trước đó.
+    //
+    // 0.3-0.5 -> 0.7-0.9 (17-09-2026, theo yêu cầu, TRẢ VỀ). Xác nhận đúng
+    // nghi ngờ ở trên: run 20260917_003717 (resume 165352, đúng dải 0.3-0.5 +
+    // tỉ lệ 40/60) cho `ep_rew_mean` giảm ròng 15.2 -> 10.9 suốt 100k bước,
+    // kèm một giai đoạn sập rõ (step 208k-223k: goal 40-55%, timeout 45-50%)
+    // không hồi phục hoàn toàn. Rộng lại về mức đã đo 100% "đường dốc học
+    // được" trước khi bắt đầu giai đoạn học né nghiêm túc.
+    //
+    // 0.7-0.9 -> 0.5-0.6 (19-09-2026, theo yêu cầu). Resume từ checkpoint
+    // 230352 (run 20260918_020756, train ở đúng 0.7-0.9 + 40/60 + lr 1e-4,
+    // PASS 4/4 ở offset train nhưng FAIL clear_episodes ở offset=0: 43.3%/
+    // 52.5%). Chỉ đổi offset so với điều kiện đã train ra 230352. Nội suy từ
+    // bảng đo: ~75-85% tập có đường dốc học né (0.4 m: 67%, 0.8 m: 100%);
+    // lần 0.3-0.5 sập nhưng chạy với lr 3e-4 nên chưa tách được lỗi do
+    // offset hay do lr.
+    //
+    // 0.5-0.6 -> 0.0-0.4 (21-09-2026, theo yêu cầu, hướng A). Tâm cặp người cách
+    // đường start->goal |offset| ~ U(0.0, 0.4) m, phía trái/phải ngẫu nhiên.
+    // Lý do: (1) muốn tâm hai người sát đường đi của robot; (2) run 235537
+    // (335k-412k) THỰC RA đã train ở offset 0 cố định vì lỗi offset dính (xem
+    // SelectScenario) và cho 412852 PASS 4/4 ở offset=0, nên dải này bao trùm
+    // điều nó đã học mà vẫn có đa dạng hình học. Bảng đo trên: 0.0 m chỉ 6% tập
+    // có đường dốc học né, 0.4 m 67% - dải trộn giữ được cả hai đầu. Giữ lr
+    // 1e-4 (lần 0.3-0.5 cũ sập nhưng chạy lr 3e-4). Các ô eval "offset train"
+    // trước 21-09 bị nhiễm offset dính.
+    //
+    // 18-09-2026: dải này giờ đọc từ talking_offset_min_/max_ (mặc định lúc
+    // đó 0.7/0.9, KHÔNG đổi hành vi train) thay vì hardcode, để lệnh scenario
+    // "talking route ... offset lo hi" có thể ép một dải khác CHỈ cho một
+    // lần gọi SelectScenario - dùng để eval "người đứng hẳn giữa đường"
+    // (offset 0 0), không phải để đổi số train. Xem EnvConfig.talking_offset_override.
     const double side = (NextUniform(0.0, 1.0) < 0.5) ? 1.0 : -1.0;
-    RoutePoint(NextUniform(0.45, 0.8), side * NextUniform(0.7, 0.9),
+    RoutePoint(NextUniform(0.45, 0.8),
+      side * NextUniform(talking_offset_min_, talking_offset_max_),
       &centre_x, &centre_y);
     SpawnTalkingActor(
       "m_sweater",
@@ -1033,6 +1072,17 @@ private:
     std::istringstream stream(command);
     std::string scenario;
     stream >> scenario;
+
+    // 21-09-2026: the `offset` token below used to STICK: talking_offset_min_/
+    // max_ are members, so after one `offset 0 0` (an eval-only worst case)
+    // every later command without the token -- a plain --eval, or a training
+    // run on the same still-running Gazebo -- silently kept offset 0 until
+    // gzserver restarted. Measured: right after an `offset 0 0` call a plain
+    // `talking` command still put the pair centre 0.00 m from the route.
+    // Reset to the defaults on every call; the token then applies to this
+    // call only, which is what the comment on it always claimed.
+    talking_offset_min_ = default_talking_offset_min_;
+    talking_offset_max_ = default_talking_offset_max_;
 
     // Latched republish of the bare name, so a late subscriber (zone_markers.py
     // after a restart) can catch up without anyone resending the command.
@@ -1075,11 +1125,29 @@ private:
         }
         continue;
       }
+      // 18-09-2026: EVAL-ONLY override of the `talking` pair's lateral
+      // offset band, e.g. "offset 0.0 0.0" to plant the pair dead-centre on
+      // the route -- the worst case for probing avoidance, not something
+      // any training run sends. See EnvConfig.talking_offset_override on the
+      // Python side; default here (0.0, 0.4) is untouched unless this token
+      // arrives.
+      if (token == "offset") {
+        double lo = 0.0, hi = 0.0;
+        if (stream >> lo >> hi) {
+          talking_offset_min_ = lo;
+          talking_offset_max_ = hi;
+        } else {
+          gzerr << "scenario command [" << command << "] has `offset` "
+                << "without two numbers after it; keeping the previous "
+                << "offset band\n";
+        }
+        continue;
+      }
       try {
         rng_.seed(static_cast<unsigned int>(std::stoul(token)));
       } catch (const std::exception &) {
         gzerr << "scenario command [" << command << "] carries [" << token
-              << "], which is neither a seed nor `route`\n";
+              << "], which is neither a seed, `route`, nor `offset`\n";
       }
     }
 
@@ -1197,6 +1265,16 @@ private:
   double route_start_y_{-2.0};
   double route_end_x_{1.2};
   double route_end_y_{0.3};
+
+  // 18-09-2026: `talking` pair lateral offset band, in metres either side of
+  // the route. Matches the trained default (0.0-0.4); only a `offset lo hi`
+  // token in SelectScenario's command changes it, and that token is only
+  // ever sent for an eval-only worst case, never during training. See
+  // EnvConfig.talking_offset_override.
+  const double default_talking_offset_min_{0.0};
+  const double default_talking_offset_max_{0.4};
+  double talking_offset_min_{0.0};
+  double talking_offset_max_{0.4};
 };
 
 GZ_REGISTER_WORLD_PLUGIN(AnimatedPeopleRelease)
