@@ -265,6 +265,17 @@ class EnvConfig:
     # needs a publish period or two to report a velocity for them at all.
     scenario_settle_time: float = 0.6
 
+    # 18-09-2026: EVAL-ONLY override of the `talking` pair's lateral offset
+    # from the route (animated_people_release.cpp's SpawnTalkingPeople draws
+    # it from [0.0, 0.4] otherwise). None means "use the plugin's own
+    # default" -- this stays None for every training run and for a plain
+    # --eval; only train.py's --eval-talking-offset sets it, via
+    # dataclasses.replace(), never through a saved YAML. A worst case for
+    # probing avoidance (people dead-centre on the route, not the randomised
+    # band the policy actually trained on) belongs here, not in rl_train.yaml,
+    # so nobody can accidentally train against it.
+    talking_offset_override: tuple = None
+
     # Hold physics between control steps: unpause, let exactly control_period
     # of simulated time pass, pause again, and only then read the observation.
     #

@@ -10,6 +10,7 @@ Panels:
         - /Global Planner1/Path1
         - /Controller1/Local Costmap1
         - /Controller1/Local Plan1
+        - /MarkerArray1
       Splitter Ratio: 0.5833333134651184
     Tree Height: 666
   - Class: rviz_common/Selection
@@ -128,8 +129,8 @@ Visualization Manager:
     - Alpha: 1
       Autocompute Intensity Bounds: true
       Autocompute Value Bounds:
-        Max Value: 10.741185188293457
-        Min Value: -4.577037334442139
+        Max Value: 10.722289085388184
+        Min Value: -4.824127674102783
         Value: true
       Axis: X
       Channel Name: intensity
@@ -575,7 +576,7 @@ Visualization Manager:
         Durability Policy: Volatile
         History Policy: Keep Last
         Reliability Policy: Reliable
-        Value: /waypoints
+        Value: /social_rl/zone_markers
       Value: true
     - Alpha: 1
       Class: rviz_default_plugins/RobotModel
@@ -694,7 +695,7 @@ Visualization Manager:
       Invert Z Axis: false
       Name: Current View
       Near Clip Distance: 0.009999999776482582
-      Scale: 71.72926330566406
+      Scale: 48.8814811706543
       Target Frame: base_link
       Value: TopDownOrtho (rviz_default_plugins)
       X: 0.4037398099899292

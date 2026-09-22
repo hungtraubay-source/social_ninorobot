@@ -473,8 +473,15 @@ class SocialAvoidEnv(gym.Env):
         """
         if self._route is None:
             return scenario
-        return '{} route {:.3f} {:.3f} {:.3f} {:.3f}'.format(
+        command = '{} route {:.3f} {:.3f} {:.3f} {:.3f}'.format(
             scenario, *self._route)
+        # 18-09-2026: eval-only worst case, see EnvConfig.talking_offset_override.
+        # None (every training run, and a plain --eval) leaves this command
+        # exactly as before.
+        if self.env_config.talking_offset_override is not None:
+            command += ' offset {:.3f} {:.3f}'.format(
+                *self.env_config.talking_offset_override)
+        return command
 
     def _episode_route(self, robot_x: float, robot_y: float, goal) -> tuple:
         """This episode's start -> goal line, converted into the world frame."""

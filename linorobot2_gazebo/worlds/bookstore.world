@@ -465,9 +465,10 @@
         <include>
             <uri>model://aws_robomaker_retail_BookshelfA_01</uri>
         </include>
-        <!-- 15-09-2026: dịch tay trong Gazebo đang chạy, cập nhật khớp lại,
-        theo yêu cầu. Pose cũ: 1.405153 -4.761649 0.003411 0 0 0 -->
-        <pose frame="">1.405153 -2.566638 0.003411 0 0 0</pose>
+        <!-- 17-09-2026: dịch tay trong Gazebo đang chạy (mở lại phiên mới),
+        cập nhật khớp lại, theo yêu cầu. Pose cũ: 0.585091 -3.199201
+        0.003411 0 0 0 -->
+        <pose frame="">4.060800 -3.813700 0.003411 0 0 0</pose>
 	</model>
 
 	<!-- <model name="BookshelfA_01_004">
@@ -551,18 +552,20 @@
         <include>
             <uri>model://aws_robomaker_retail_BookshelfC_01</uri>
         </include>
-        <!-- 15-09-2026: dịch tay trong Gazebo đang chạy, cập nhật khớp lại,
-        theo yêu cầu. Pose cũ: -4.517110 -1.310229 0.045908 0 0 0 -->
-        <pose frame="">-4.517110 1.465533 0.045908 0 0 0</pose>
+        <!-- 17-09-2026: dịch tay trong Gazebo đang chạy (mở lại phiên mới),
+        cập nhật khớp lại, theo yêu cầu. Pose cũ: -4.858864 0.759761
+        0.045908 0 0 0 -->
+        <pose frame="">-1.522200 -3.894100 0.045908 0 0 0</pose>
 	</model>
 
 	<model name="BookshelfC_01_004">
         <include>
             <uri>model://aws_robomaker_retail_BookshelfC_01</uri>
         </include>
-        <!-- 15-09-2026: dịch tay trong Gazebo đang chạy, cập nhật khớp lại,
-        theo yêu cầu. Pose cũ: -4.614360 -4.761649 0.045908 0 0 0 -->
-        <pose frame="">-4.614360 -3.853752 0.045908 0 0 0</pose>
+        <!-- 17-09-2026: dịch tay trong Gazebo đang chạy (mở lại phiên mới),
+        cập nhật khớp lại, theo yêu cầu. Pose cũ: -2.279736 3.336890
+        0.045908 0 0 0 -->
+        <pose frame="">-3.907400 1.677900 0.045908 0 0 0</pose>
 	</model>
 
 

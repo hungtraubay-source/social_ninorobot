@@ -553,21 +553,40 @@ env:
   # talking_goal 80.0%/87.5% - cả hai đều PASS 3/4 tiêu chí xã hội, chỉ còn
   # thiếu none_goal (>90%). Tăng tiếp một nấc theo đúng nhịp curriculum, GIỮ
   # NGUYÊN learning_rate để cô lập biến như mọi lần trước.
+  #
+  # 55/45 -> 40/60 (16-09-2026, theo yêu cầu). Sau 40000 bước ở 55/45 (run
+  # 20260916_160820), --eval 30 tập checkpoint 165352 ra none_goal 89.5%
+  # nhưng --eval LẠI 60 tập cùng checkpoint đó tụt còn 83.9% (talking_goal
+  # 81.8% -> 65.5%) - bài học: n=30 không đủ tin, và talking_goal vẫn còn
+  # thấp/nhiễu. Lần này `talking` LẦN ĐẦU chiếm đa số (60% > 50%), kèm CÙNG
+  # LÚC offset pair thu hẹp 0.7-0.9 -> 0.3-0.5 (xem animated_people_release.cpp)
+  # - HAI BIẾN đổi cùng lúc, phá quy tắc cô lập biến đã theo suốt file này,
+  # nhưng đây là yêu cầu trực tiếp kèm lý do rõ ràng (đảm bảo gặp người +
+  # tăng tín hiệu học né), không phải suy đoán. Nếu kết quả đổi (tốt hay xấu)
+  # thì KHÔNG tách được là do tỉ lệ hay do offset - phải test lại tách biệt
+  # nếu cần biết chính xác cái nào có tác dụng.
+  #
+  # 40/60 -> 30/70 (18-09-2026, theo yêu cầu). Sau khi hạ learning_rate
+  # 3e-4->1e-4 (xem mục train: phía dưới) và trả offset về 0.7-0.9, checkpoint
+  # 230352 (run 20260918_020756) --eval 60 tập lần đầu tiên PASS đủ 4/4 tiêu
+  # chí: none_goal 95.5%, talking_goal 78.9%, clear_episodes 61.7%,
+  # peak_unseen-peak_intrusion -0.009. none_goal đã vững, đúng lúc tăng tiếp
+  # talking theo curriculum. CHỈ đổi scenarios lần này, GIỮ NGUYÊN
+  # learning_rate=1e-4 và offset=0.7-0.9 (cả hai vừa được xác nhận có tác
+  # dụng, không đụng vào) - resume từ 230352, không phải checkpoint khác.
+  #
+  # 30/70 -> 40/60 (19-09-2026, theo yêu cầu). Run 20260918_180359 (30/70,
+  # resume 230352) KHÔNG cải thiện: --eval 60 tập ở offset train, 280352 FAIL
+  # (clear_episodes 55.0%), 265352 PASS ngang 230352 (cả hai 61.7%). Quay về
+  # đúng 40/60 mà 230352 đã train ra, và resume LẠI từ 230352 - kèm offset
+  # 0.7-0.9 -> 0.5-0.6 (xem animated_people_release.cpp). So với điều kiện đã
+  # train ra 230352 thì CHỈ offset đổi. Lưu ý: --eval mặc định giờ cũng dùng
+  # 0.5-0.6, không còn so ngang hàng được với các con số eval 0.7-0.9 cũ.
   scenarios:
     - none
     - none
     - none
     - none
-    - none
-    - none
-    - none
-    - none
-    - none
-    - none
-    - none
-    - talking
-    - talking
-    - talking
     - talking
     - talking
     - talking
@@ -586,11 +605,62 @@ env:
   # (= obstacle_collision_distance 0.30 + goal_distance 0.35), nếu không vùng
   # "đã tới đích" chồng lên vùng "va chạm" và robot bị chấm hit_obstacle ngay
   # trước khi tới nơi.
+  #
+  # 4 -> 7 goal (20-09-2026, theo yêu cầu): tăng tỉ lệ tập có |bearing| > 90 độ
+  # từ 12.7% lên ~35% mà KHÔNG mở rộng yaw (vẫn (-pi/2, pi/2), ros_env.py). 4
+  # goal cũ đều nằm về +x/+y so với 4 start (hướng tuyến -9..+54 độ) nên yaw
+  # ±90 độ chỉ đẩy được 12.7% tập quá 90 độ. 3 goal mới thêm hướng tuyến
+  # ~148 / ~67 / ~-130 độ. Mô phỏng 400000 lần bốc: |bearing|>45 65.9%, >90
+  # 34.8%, >135 15.8%; khoảng cách start->goal vẫn 3.18-5.80 m. Kiểm với
+  # map_train_rl-1.pgm: 3 goal mới cách vật cản 1.30 / 3.07 / 2.25 m, đường
+  # thẳng từ cả 4 start tới chúng cách vật cản >= 1.17 m. Chưa kiểm bằng mắt
+  # trong Gazebo/RViz. Lệch trái nhiều hơn phải (22.8% vs 11.9% cho bearing
+  # >+90 vs <-90): vùng trống của map này ít chỗ hợp lệ cho goal phía dưới-phải.
+  # Hệ quả: số eval sau mốc này không so ngang hàng được với số cũ.
+  #
+  # 7 -> 5 goal (20-09-2026, theo yêu cầu, LÙI một nấc curriculum). Bản 7 goal
+  # không học lên: 2 run (20260920_001825 + 20260920_081645, ~100k bước) goal
+  # rate phẳng ~0.78 (độ dốc -0.005 +- 0.006 mỗi 10k), timeout nhích lên
+  # 0.09 -> 0.15-0.19. Kịch bản `none` (không người) vẫn timeout ở goal mới:
+  # (-2.25, -2.5) 6/14 = 43%, (-3.25, 2.75) 6/30 = 20%, 5 goal còn lại 9-12%
+  # => thiếu kỹ năng quay đầu, không phải chuyện né người. Tiền lệ: ros_env.py
+  # (04-09) yaw cả vòng làm none_goal kẹt ~0.6. Bỏ 2 goal quay đầu, giữ lại 4
+  # goal cũ + (2.25, 5.0) (hướng ~67 độ, về đích 78% ở 332852). |bearing| > 90
+  # kỳ vọng ~18% (trước 12.7%). approx_kl 0.03 / clip_fraction 0.13 nên KHÔNG
+  # phải LR quá thấp, giữ 1e-4. Resume từ 252852 (run 20260919_150810), trước
+  # mọi lần đổi goal.
+  #
+  # 5 -> 6 goal (20-09-2026, theo yêu cầu, THÊM LẠI một goal quay đầu NHẸ hơn).
+  # Sau 5 goal: 332852 (run 20260920_101406) là bản PASS 4/4 ở offset=0, train
+  # tiếp 50k bước (run 20260920_191037) KHÔNG vượt nó (350352 / 375352 / final
+  # đều FAIL, timeout 12-17%). Thêm [-1.5, -3.0] (hướng tuyến ~ -119 độ, kỳ
+  # vọng 66% tập của goal này vượt 90 độ) thay cho 2 goal đã thất bại
+  # (-2.25,-2.5) ~ -130 độ (timeout 43% ở `none`) và (-3.25, 2.75) ~ 148 độ.
+  # Chỉ 1 goal / 6 nên phần khó chiếm ~17% số tập (bản 7 goal: 29%). Mô phỏng
+  # 300000 lần bốc: |bearing|>90 25.8% (5 goal: 17.6%, 7 goal: 34.8%), >135
+  # 9.2% (7 goal: 15.8%), khoảng cách vẫn 3.18-5.80 m. Kiểm map_train_rl-1.pgm:
+  # goal cách vật cản 1.72 m, đường thẳng từ 4 start cách >= 0.99 m; cặp
+  # `talking` rơi sát/trong vật cản (<0.20 m) chỉ 0.1% lần bốc. Đã loại
+  # (-0.5, -3.25) (milder, ~-104 độ) vì 10.3% lần bốc đặt người vào vật cản.
+  # Chưa kiểm bằng mắt trong Gazebo/RViz. learning_rate GIỮ 1e-4 (chỉ đổi
+  # đúng một biến: phân phối goal).
+  #
+  # OFFSET CẶP `talking` 0.5-0.6 -> 0.0-0.4 (21-09-2026, theo yêu cầu, hướng A;
+  # hằng số nằm trong animated_people_release.cpp, KHÔNG có khoá YAML). |offset|
+  # ~ U(0.0, 0.4), phía ngẫu nhiên: tâm cặp người sát đường đi của robot. Cùng
+  # ngày sửa lỗi offset DÍNH trong plugin (sau một lệnh `offset 0 0` mọi lệnh
+  # sau vẫn offset 0 tới khi khởi động lại gzserver): các ô eval "offset train"
+  # sau ô đầu tiên của mỗi lô trước đó thực ra chạy ở offset 0, và run
+  # 20260920_235537 (checkpoint 335k-412k) train cả run ở offset 0 cố định.
+  # Đã đo 24 lần bốc trên Gazebo thật sau khi sửa. Phải KHỞI ĐỘNG LẠI Gazebo
+  # để nạp plugin mới. Resume từ 412852 (run 20260920_235537).
   goals:
     - [4.5, 2.0]
     - [4.0, 4.2]
     - [4.5, 0.8]
     - [3.8, 1.5]
+    - [2.25, 5.0]
+    - [-1.5, -3.0]
   minimum_goal_distance: 2.0
 
   # --- PHÂN PHỐI ĐÍCH (02-09-2026, quay lại list cố định + random yaw) ---
@@ -934,7 +1004,16 @@ train:
   # d0/talking + progress_gain, checkpoint cũ không resume được nữa (khác
   # kích thước/ý nghĩa quan sát) - đúng tình huống "trọng số ngẫu nhiên" như
   # 12-09-2026 và 13-09-2026 phía trên, về lại mặc định 3e-4 của dự án.
-  learning_rate: 0.0003
+  #
+  # 3e-4 -> 1e-4 (18-09-2026, theo yêu cầu). Resume từ checkpoint 177852 (run
+  # 20260917_153135, offset 0.7-0.9 vừa sửa đúng) - --eval 40 tập xác nhận đây
+  # là đỉnh cục bộ tốt: talking_goal 90.0% (n=40), none_goal 85.0%. Train tiếp
+  # 40k bước với 3e-4 (run 20260917_195901) làm none_goal lên 92.3% (PASS lần
+  # đầu) nhưng talking_goal SẬP còn 59.3% - đúng mẫu "fine-tune một đỉnh cục bộ
+  # bằng LR cao ghi đè mất kỹ năng vừa học", đã lặp lại ở dòng 928-933 và
+  # 916-921 phía trên. Hạ về 1e-4, GIỮ NGUYÊN scenarios 40/60 để cô lập đúng
+  # một biến, resume lại từ 177852 (không phải từ bản cuối 195901 đã tệ đi).
+  learning_rate: 0.0001
   gamma: 0.99
   gae_lambda: 0.95
   clip_range: 0.2
