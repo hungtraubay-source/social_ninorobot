@@ -70,11 +70,24 @@ git commit -m "Update Gazebo scenario and navigation config"
 git push -u origin feature/fix-gazebo-config
 
 
-# này chạy để  ignore file 
-git rm --cached duong_dan/toi/file_can_bo
+##### này chạy để  ignore file 
+
+git checkout -b fix/ignore-local-model
+
+# 1. Thêm dòng ignore vào file
+echo "duong_dan/toi/file_can_bo" >> .gitignore
+
+# 2. Dừng tracking file đó (nếu nó đã từng commit trước đây)
+git rm -r --cached duong_dan/toi/file_can_bo
+
+# 3. Add + commit
 git add .gitignore
 git commit -m "Stop tracking local file"
+
+# 4. Push
 git push -u origin fix/ignore-local-model
+
+với điều kiện mày phải ở branch fix
 
 
 
