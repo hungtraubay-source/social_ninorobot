@@ -138,7 +138,7 @@ def generate_launch_description():
                         'cấu hình quan sát của chính checkpoint'),
         DeclareLaunchArgument(
             'zones', default_value='true',
-            description='Vẽ K_soc ra /social_rl/social_costmap và '
+            description='Vẽ VLM-confirmed talking hard zones ra '
                         '/social_rl/zone_markers cho RViz'),
         DeclareLaunchArgument(
             'prediction_times', default_value='[0.0]',
@@ -182,21 +182,19 @@ def generate_launch_description():
         agent(sim_config, IfCondition(sim)),
         agent(real_config, UnlessCondition(sim)),
 
-        # Khối D ra hình. Chạy cùng agent chứ không phải một terminal riêng:
-        # nó chỉ nghe /social_rl/constraint_field và vẽ, không nằm trong vòng
-        # điều khiển, nên quên bật nó chỉ có nghĩa là RViz trống - đúng cái
-        # bẫy tốn thời gian nhất khi xem một run.
-        #
-        # LƯU Ý: agent chỉ publish constraint_field KHI ĐANG CÓ ĐÍCH. Tới đích
-        # rồi thì nó ngừng, và vùng biến mất khỏi RViz. Không phải hỏng.
+        # Render the talking o-space from the exact VLM + People topics that
+        # feed deployment. This is visualization only; it never publishes a
+        # velocity command or changes the PPO observation.
         Node(
             package='social_rl',
-            executable='zone_markers',
-            name='zone_markers',
+            executable='vlm_zone_visualizer',
+            name='vlm_zone_visualizer',
             output='screen',
             parameters=[{
                 'use_sim_time': ParameterValue(sim, value_type=bool),
-                'prediction_times': LaunchConfiguration('prediction_times'),
+                'model_path': model_path,
+                'env_config': LaunchConfiguration('env_config'),
+                'people_topic_override': people_topic_override,
             }],
             condition=IfCondition(LaunchConfiguration('zones'))),
     ])

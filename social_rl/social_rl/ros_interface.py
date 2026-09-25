@@ -19,13 +19,14 @@ from rclpy.qos import (QoSDurabilityPolicy, QoSHistoryPolicy, QoSProfile,
                        QoSReliabilityPolicy)
 from rclpy.time import Time
 from sensor_msgs.msg import LaserScan
-from social_perception.msg import People
+from social_perception.msg import People, VlmPersonStates
 from tf2_ros import TransformException
 
 from social_rl.constraint_field import (compile_zones, intrusion_at_zones,
                                         intrusion_by_type)
 from social_rl.observation import (ObservationInput, RelativeEntity,
                                    build_observation)
+from social_rl.semantic_fusion import VlmStateCache
 
 
 @dataclass
@@ -61,6 +62,13 @@ class EnvConfig:
     # trained on ground truth runs unmodified on the real tracker.
     people_source: str = 'ground_truth'
     people_topic: str = '/people'
+    # Block C is a slower stream. Its header names the People frame that was
+    # classified, so deployment joins it by person ID and source timestamp
+    # without delaying a control tick for the VLM.
+    vlm_states_topic: str = '/social_perception/vlm_person_states'
+    # Seconds a semantic verdict may trail the current tracker sample. The
+    # source-stamp check below still rejects a recycled ByteTrack identity.
+    vlm_state_timeout: float = 25.0
 
     # --- ground truth chỉ trong tầm camera ---
     # Ground truth của Gazebo liệt kê MỌI actor, không qua camera, không qua
@@ -588,6 +596,9 @@ class PerceptionBridge:
         # whether a person came from Gazebo or from YOLO, and that includes how
         # long they survive after leaving the frame.
         self._memory = PeopleMemory(env_config, observation_config)
+        # Deployment consumes delayed VLM output only as semantic metadata.
+        # Training's ground-truth provider remains independent of Block C.
+        self._vlm_states = VlmStateCache(env_config.vlm_state_timeout)
 
         # Keep only the newest sample: an RL step acts on now, and a queue of
         # stale scans would just delay every reaction by its own length.
@@ -605,6 +616,9 @@ class PerceptionBridge:
                                  self._on_people, 10)
         node.create_subscription(Odometry, env_config.odom_topic,
                                  self._on_odom, sensor_qos)
+        if self._people_provider is None:
+            node.create_subscription(VlmPersonStates, env_config.vlm_states_topic,
+                                     self._on_vlm_states, 10)
 
         # Block D no longer publishes from here. In training the field is an
         # in-process grid (constraint_field.py) that feeds the observation and
@@ -616,6 +630,9 @@ class PerceptionBridge:
 
     def _on_people(self, msg):
         self.people = msg
+
+    def _on_vlm_states(self, msg):
+        self._vlm_states.update(msg)
 
     def _on_odom(self, msg):
         self.odom = msg
@@ -749,19 +766,19 @@ class PerceptionBridge:
                                    person.pose.position.y)
             vx, vy = rotate_vector(transform, person.velocity.linear.x,
                                    person.velocity.linear.y)
-            # Person.msg is tracking only now: id, pose, velocity. scene_type is
-            # left empty here and the social field the policy sees comes from
-            # block D's grounding node, not from a per-person label on this
-            # message. facing is still the tracked body orientation.
+            # Geometry remains owned by the tracker. VLM only selects the
+            # social-zone meaning for this same timestamp-safe person ID.
+            scene_type, scene_confidence = self._vlm_states.lookup(
+                person.id, message.header)
             if (self._env.people_camera_only
                     and not visible_to_camera(x, y, self._env)):
                 continue
             people.append(RelativeEntity(
                 x, y, vx, vy,
                 facing=quaternion_to_yaw(person.pose.orientation) + transform_yaw,
-                scene_type='',
+                scene_type=scene_type,
                 track_id=person.id,
-                scene_confidence=0.0))
+                scene_confidence=scene_confidence))
         return people
 
     def goal_transform(self):
