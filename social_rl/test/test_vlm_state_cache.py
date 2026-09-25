@@ -59,3 +59,19 @@ def test_talking_result_survives_the_measured_qwen_latency():
 
     assert cache.lookup('person_1', _header(120.0)) == ('talking', 1.0)
     assert cache.lookup('person_1', _header(125.1)) == ('', 0.0)
+
+
+def test_single_talking_person_creates_individual_zone():
+    field = compile_zones([
+        RelativeEntity(1.0, 0.0, scene_type='talking', track_id='person_1',
+                       scene_confidence=1.0, facing=0.5),
+    ], ConstraintFieldConfig())
+
+    assert len(field.zones) == 1
+    zone = field.zones[0]
+    assert zone.scene_type == 'talking'
+    assert zone.hardness == 'soft'
+    assert zone.track_ids == ('person_1',)
+    assert zone.trajectory_of_zone[0].center == (1.0, 0.0)
+    assert zone.trajectory_of_zone[0].orientation == 0.5
+

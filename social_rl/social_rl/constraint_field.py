@@ -375,6 +375,16 @@ def compile_zones(people, config: ConstraintFieldConfig, *,
             sigma_h, sigma_s, sigma_r = _waiting_sigmas(
                 config.waiting_distance, factor, config)
             orientation = person.facing
+        elif scene_type == 'talking':
+            # Single talking person: orient forward along their facing direction (or
+            # velocity vector if moving) to maintain an active interaction personal space.
+            if moving:
+                sigma_h, sigma_s, sigma_r = _passing_sigmas(speed, factor, config)
+                orientation = math.atan2(person.vy, person.vx)
+            else:
+                sigma_h, sigma_s, sigma_r = _waiting_sigmas(
+                    config.waiting_distance, factor, config)
+                orientation = person.facing
         elif scene_type == 'passing' or moving:
             sigma_h, sigma_s, sigma_r = _passing_sigmas(speed, factor, config)
             orientation = (math.atan2(person.vy, person.vx) if moving

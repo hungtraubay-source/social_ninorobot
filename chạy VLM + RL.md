@@ -37,10 +37,8 @@ ros2 launch social_navigation social_bringup.launch.py \
 source /opt/ros/humble/setup.bash
 source install/setup.bash
 
-ros2 launch social_navigation social_bringup.launch.py sim:=true rviz:=true \
-  yolo_model_path:=/home/hung/my_amr_thesis_test-main/src/my_amr_perception/weights/yolo26n-pose.pt
 
-# terminal 3:
+## terminal 3:
 
 source install/setup.bash
 ros2 launch social_navigation social_sim.launch.py \
@@ -51,7 +49,7 @@ ros2 launch social_navigation social_sim.launch.py \
 source install/setup.bash
 ros2 topic pub --once /animated_people/scenario std_msgs/msg/String "{data: talking}"
 
-# terminal 4:
+##### terminal 4:
 
 source install/setup.bash
 ros2 launch social_rl rl_agent.launch.py \
@@ -61,6 +59,10 @@ ros2 launch social_rl rl_agent.launch.py \
   rviz:=true \
   people:=perception \
   zones:=true
+
+
+
+
 
 source install/setup.bash
 

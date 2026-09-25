@@ -94,8 +94,8 @@ def talking_group_zones(people_message, states: VlmStateCache,
     field = compile_zones(
         entities, field_config,
         frame=people_message.header.frame_id or 'odom')
-    return [zone for zone in field.zones
-            if zone.scene_type == 'talking' and zone.hardness == 'hard']
+    # Include all talking zones: group pairs (hard) and single talking people (individual)
+    return [zone for zone in field.zones if zone.scene_type == 'talking']
 
 
 class VlmZoneVisualizer(Node):
@@ -201,9 +201,8 @@ class VlmZoneVisualizer(Node):
         label.scale.z = 0.22
         label.color.r = 1.0
         label.color.g = 1.0
-        label.color.b = 1.0
-        label.color.a = 1.0
-        label.text = f'TALKING — hard zone\n{", ".join(zone.track_ids)}'
+        zone_kind = 'hard zone' if zone.hardness == 'hard' else 'individual zone'
+        label.text = f'TALKING — {zone_kind}\n{", ".join(zone.track_ids)}'
         self.set_lifetime(label)
         return outline, label
 

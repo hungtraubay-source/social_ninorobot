@@ -2,7 +2,7 @@ social_vlm_interaction:
   ros__parameters:
     # Keep the VLM opt-in: Block B's RGB-D/YOLO tracking never depends on it.
     use_sim_time: true
-    enable_vlm: false
+    enable_vlm: true
 
     # These inputs originate in one Block-B RGB callback and share its stamp.
     rgb_topic: /camera/color/image_raw
