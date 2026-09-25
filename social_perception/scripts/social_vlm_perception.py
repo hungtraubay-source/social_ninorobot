@@ -509,6 +509,7 @@ class SocialVlmPerception(Node):
         self.interaction_timeout = float(self.get_parameter('interaction_timeout').value)
         self.crop_margin = float(self.get_parameter('vlm_crop_margin').value)
         self.last_vlm_enqueue = 0.0
+        self.display_id_map: dict[int, int] = {}
         # This lock is used only if YOLO is explicitly put on CUDA. The default
         # CPU detector keeps processing current camera frames while Qwen uses
         # the GPU in the background.
@@ -937,7 +938,9 @@ class SocialVlmPerception(Node):
                     max(0, int(rx1)):min(depth.shape[1], int(rx2))]
         valid = roi[np.isfinite(roi) & (roi >= self.min_depth) &
                     (roi <= self.max_depth)]
-        return float(np.median(valid)) if valid.size >= 8 else None
+        # Use the 20th percentile instead of median to ensure we measure the person (closer)
+        # and ignore the background wall if the bounding box is too wide.
+        return float(np.percentile(valid, 20)) if valid.size >= 8 else None
 
     def keypoint_depth(self, depth, u, v, rgb_shape):
         """Median registered depth around one RGB keypoint pixel."""
@@ -1411,17 +1414,38 @@ class SocialVlmPerception(Node):
                 x1, y1, x2, y2 = bbox
                 point = None if z is None or transform is None else self.point_in_target(
                     *self.torso_center(bbox), z, image.shape, transform)
-                color = (0, 200, 255) if point is not None else (0, 0, 255)
-                # ByteTrack assigns this numeric ID. Show that identity on the
-                # camera image so an operator can follow one track across
-                # frames; ``person_<id>`` remains the ROS topic contract below.
-                track_id = None if box.id is None else int(box.id[0].item())
+                # ByteTrack assigns a numeric ID; map it to a display ID from 1 to 5
+                # so that colors and downstream IDs are strictly bound to 1-5.
+                raw_track_id = None if box.id is None else int(box.id[0].item())
+                if raw_track_id is not None:
+                    if raw_track_id not in self.display_id_map:
+                        used = set(self.display_id_map.values())
+                        for slot in range(1, 6):
+                            if slot not in used:
+                                self.display_id_map[raw_track_id] = slot
+                                break
+                        else:
+                            # Fallback if >5 people
+                            self.display_id_map[raw_track_id] = (raw_track_id % 5) + 1
+                    track_id = self.display_id_map[raw_track_id]
+                else:
+                    track_id = None
                 track_label = f'ID {track_id}' if track_id is not None else 'ID ?'
-                # Detection confidence remains in PersonObservation for logic
-                # and debugging, but the camera overlay is intentionally
-                # limited to the track identity and measured depth.
-                label = track_label + (
-                    f' {z:.1f}m' if z is not None else ' no-depth')
+                label = track_label + (f' {z:.1f}m' if z is not None else ' no-depth')
+
+                # Assign a distinct palette color per track_id so multiple people
+                # are visually distinguishable on the camera overlay.
+                _PERC_PALETTE = [
+                    (0, 255, 0),    # Green
+                    (255, 0, 0),    # Blue
+                    (0, 0, 255),    # Red
+                    (0, 255, 255),  # Yellow
+                    (255, 0, 255),  # Magenta
+                ]
+                if track_id is not None:
+                    color = _PERC_PALETTE[track_id % len(_PERC_PALETTE)]
+                else:
+                    color = (0, 200, 255)  # fallback orange for untracked detections
                 cv2.rectangle(annotated, (int(x1), int(y1)),
                               (int(x2), int(y2)), color, 2)
                 cv2.putText(annotated, label, (int(x1), max(20, int(y1) - 7)),
@@ -1546,6 +1570,11 @@ class SocialVlmPerception(Node):
             markers.markers.extend(self.predicted_trajectory_markers(
                 people.header, track_id, state))
         self.tracks = new_tracks
+        # Clean up mapping for raw track IDs that are no longer active
+        stale_raw_ids = [rid for rid, did in self.display_id_map.items() if did not in new_tracks]
+        for rid in stale_raw_ids:
+            del self.display_id_map[rid]
+
         visible_ids = {item.id for item in people.people}
         removed_completed_result = False
         with self.state_lock:

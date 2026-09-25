@@ -12,7 +12,7 @@ ros2 launch linorobot2_gazebo gazebo.launch.py \
   spawn_y:=0.0 \
   spawn_z:=0.0 \
   spawn_yaw:=0.0 \
-  publish_odom_tf:=true
+  publish_odom_tf:=false
 
 
 source /opt/ros/humble/setup.bash
@@ -32,6 +32,13 @@ ros2 launch social_navigation social_bringup.launch.py \
   vlm_interaction_config:=/home/hung/ninorobot2/social_perception/config/social_vlm_interaction.yaml \
   yolo_model_path:=/home/hung/ninorobot2/yolov8n.pt \
   rviz:=false
+
+
+  source /opt/ros/humble/setup.bash
+source install/setup.bash
+
+source install/setup.bash
+ros2 launch social_navigation social_bringup.launch.py yolo_model_path:=/home/hung/my_amr_thesis_test-main/src/my_amr_perception/weights/yolo26n-pose.pt
 
 #### 
 source /opt/ros/humble/setup.bash

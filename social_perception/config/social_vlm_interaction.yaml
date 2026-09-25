@@ -8,10 +8,10 @@ social_vlm_interaction:
     rgb_topic: /camera/color/image_raw
     observations_topic: /people_observations
     people_topic: /people/tracks
-    # Output semantic state per ByteTrack ID. It is debug-only in this phase;
-    # no Nav2/costmap node subscribes to it yet.
+    # Output: VlmPersonStates — one VlmPersonState per visible track.
+    # Each state carries track_id, person_id (for semantic_fusion join), color, and state.
     states_topic: /social_perception/vlm_person_states
-    # Newest labelled frame sent to Qwen; inspect this before trusting output.
+    # Newest labelled frame sent to Qwen; subscribe via rqt_image_view to debug.
     labelled_scene_topic: /social_perception/vlm_input_image
 
     # The adapter was trained from an Unsloth pre-quantized Qwen base. The node
@@ -23,19 +23,19 @@ social_vlm_interaction:
     vlm_require_cuda: true
     # Keep every FP4/NF4 visual-merger layer on one GPU; do not CPU-offload it.
     vlm_device: cuda:0
+    # 64 tokens is enough for a few JSON objects (color + state pairs).
     vlm_max_new_tokens: 64
-    vlm_min_pixels: 3136       # 56 * 56
-    vlm_max_pixels: 200704     # 256 * 28 * 28
+    vlm_min_pixels: 3136       # 56 * 56  — minimum resolution per frame patch
+    vlm_max_pixels: 50176      # 64 * 28 * 28  (quartered from original 200704, ~20% faster)
 
-    # A rolling four-frame scene is inferred at most once every 2 seconds.
+    # A rolling four-frame scene is inferred at most once per inference cycle.
     # Block B continues at its normal rate while Qwen works in another thread.
-    inference_interval_s: 2.0
-    # Full RGB scenes have ByteTrack ID labels rendered before Qwen sees them.
-    # Four frames at 0.5 s spacing span 1.5 s from oldest to newest.
     vlm_frame_count: 4
+    # Four frames at 0.5 s spacing span 1.5 s from oldest to newest.
     vlm_frame_interval_s: 0.5
     sync_cache_size: 12
-    # This wording matches the four-image fine-tune contract. Output IDs are
-    # validated against visible ByteTrack IDs in the fourth/newest frame.
+
+    # Prompt asks for numeric ID (from the bounding box label "ID <n> (<color>)") and state.
+    # The parser handles both "ID" and "id" keys, and falls back to color if needed.
     state_prompt: >
-      You are given 4 sequential images from the same short video clip in temporal order (frame 1 → frame 4).\nEach image contains bounding boxes with ID labels.\nThe same ID refers to the same person across all 4 frames.\nExamine all 4 images together as one temporal sequence.\nFor each person ID, track its movement across the sequence and assign exactly one state.\nSTATE DEFINITIONS\n\n- "crossing": moving laterally across the robot's forward path.\n- "approaching": moving toward the robot from the opposite direction.\n- "straight": moving in the same direction as the robot, ahead of it.\n- "talking": interacting or conversing with another person, typically facing or oriented toward them.\n\nUse only the IDs shown on the bounding boxes.\nAssign a state to every person ID present in the clip.\nDetermine the state from the movement trajectory across the sequence, not from a single frame.\nReturn a JSON array with one object containing "id" and "state" for each person.
+      You are given 4 sequential images from the same short video clip in temporal order (frame 1 → frame 4).\nEach person has a bounding box labeled "ID <number> (<color>)".\nExamine all 4 images together as one temporal sequence.\nAssign exactly one state to each person.\nSTATE DEFINITIONS\n- "crossing": moving laterally across the robot forward path.\n- "approaching": moving toward the robot from the opposite direction.\n- "straight": moving in the same direction as the robot, ahead of it.\n- "talking": interacting or conversing with another person.\nDetermine the state from movement trajectory across the sequence, not from a single frame.\nReturn ONLY a JSON array. Each object must have "ID" (integer from the label, e.g. 1 or 2) and "state".\nExample: [{"ID": 1, "state": "talking"}, {"ID": 2, "state": "crossing"}]

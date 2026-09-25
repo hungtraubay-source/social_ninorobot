@@ -181,7 +181,7 @@ def generate_launch_description():
 
         DeclareLaunchArgument(
             name='spawn_y', 
-            default_value='-2.0',
+            default_value='0.0',
             description='Robot spawn position in Y axis'
         ),
 

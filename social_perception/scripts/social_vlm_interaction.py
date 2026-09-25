@@ -9,23 +9,25 @@ It subscribes to Block B's synchronized output topics:
 
 Workflow & Design Decisions:
 1. Grounding & Identity Binding:
-   Each detected track is assigned a distinct bounding-box color and an explicit
-   label 'ID <id>' rendered on the frame. This allows the VLM to identify persons
-   either by color (e.g. 'red', 'green') or by numeric ID ('id': 1).
+   Each detected track is assigned a distinct bounding-box color (e.g. "green",
+   "blue") and a label 'ID <id> (<color>)' rendered on the frame.  The VLM model
+   returns {"color": "<name>", "state": "<state>"} — the color is the primary
+   grounding key that maps back to a stable ByteTrack track_id / person_id.
 2. Sim-Time Rolling Buffer:
-   Maintains a 4-frame rolling buffer strictly sampled at fixed intervals (default 0.5s)
-   using ROS simulation time (header stamp). Handles simulator clock resets gracefully.
+   Maintains a 4-frame rolling buffer strictly sampled at fixed intervals (default
+   0.5 s) using ROS simulation time (header stamp). Handles clock resets.
 3. Signature Continuity:
-   Snapshots are enqueued only when track identities remain consistent across
-   all 4 frames and the inference worker is not busy.
+   Snapshots are enqueued only when track identities are consistent across all 4
+   frames and the inference worker is idle.
 4. Video-Structure Qwen Inference & Token Confidence:
    Frames are packaged as a single temporal video sequence for Qwen2-VL.
-   Geometric-mean token probability is calculated from output logits to provide
-   a calibrated confidence score inside the raw JSON response.
+   Geometric-mean token probability is computed from output logits and stored in
+   the raw JSON response for diagnostics.
 5. Deterministic Safety Contract:
    Output topic ``/social_perception/vlm_person_states`` carries semantic labels only
-   (e.g., 'talking', 'waiting', 'walking'/'crossing'). Position, velocity, and costmap
-   geometry remain strictly owned by deterministic upstream modules.
+   (e.g., 'talking', 'crossing').  Position, velocity, and costmap geometry remain
+   strictly owned by deterministic upstream modules.  semantic_fusion.py joins these
+   labels to live People tracks via the person_id field.
 """
 
 import json
@@ -38,7 +40,6 @@ import time
 from collections import deque
 from copy import deepcopy
 from dataclasses import dataclass
-from datetime import datetime
 from pathlib import Path
 from typing import Deque, Dict, List, Optional, Set, Tuple
 
@@ -56,18 +57,20 @@ from social_perception.msg import (
     VlmPersonStates,
 )
 
-# Palette of distinct BGR colors for multi-person tracking and visualization.
+# Palette of distinct BGR colors for multi-person bounding-box rendering.
+# Index i maps to COLOR_NAMES[i]; the model receives color names as grounding keys.
 PALETTE_BGR = [
-    (0, 0, 255),    # Red
     (0, 255, 0),    # Green
     (255, 0, 0),    # Blue
+    (0, 0, 255),    # Red
     (0, 255, 255),  # Yellow
     (255, 0, 255),  # Magenta
-    (255, 255, 0),  # Cyan
 ]
 
-COLOR_NAMES = ['red', 'green', 'blue', 'yellow', 'magenta', 'cyan']
+COLOR_NAMES = ['green', 'blue', 'red', 'yellow', 'magenta']
 
+# Regex that locates the value of a "state" key inside a JSON object so we can
+# calculate per-state token confidence from model logits.
 STATE_VALUE_PATTERN = re.compile(
     r'"state"\s*:\s*"(?P<state>[a-zA-Z_]+)"',
     re.IGNORECASE,
@@ -94,11 +97,11 @@ def track_id_from_person_id(person_id: str) -> Optional[int]:
 class TrackIdentity:
     """Single tracked person identity rendered onto the frame."""
     track_id: int
-    person_id: str
-    color_name: str
+    person_id: str  # stable Block-B identifier, e.g. "person_1"
+    color_name: str  # name used as grounding key in the rendered label
 
 
-# Signature of all tracks visible in a single frame, sorted by track_id.
+# Ordered tuple of identities present in one buffer frame, sorted by track_id.
 FrameSignature = Tuple[TrackIdentity, ...]
 
 
@@ -126,6 +129,7 @@ class QwenLoraBackend:
                  require_cuda: bool, device_name: str, max_new_tokens: int,
                  min_pixels: int, max_pixels: int, logger) -> None:
         from PIL import Image as PilImageModule
+        # Pillow < 9.1 lacks the Resampling enum; patch it so Unsloth works.
         if not hasattr(PilImageModule, 'Resampling'):
             PilImageModule.Resampling = type('PillowResampling', (), {
                 'NEAREST': PilImageModule.NEAREST,
@@ -333,16 +337,10 @@ class SocialVlmInteraction(Node):
         self._declare_parameters()
 
         self.enabled = bool(self.get_parameter('enable_vlm').value)
-        self.gui_enabled = bool(self.get_parameter('enable_vlm_gui').value)
         self.frame_count = max(1, int(self.get_parameter('vlm_frame_count').value))
         self.frame_interval_s = max(0.01, float(self.get_parameter('vlm_frame_interval_s').value))
         self.prompt = str(self.get_parameter('state_prompt').value)
         self.cache_size = max(2, int(self.get_parameter('sync_cache_size').value))
-
-        self.results_dir = Path(str(self.get_parameter('results_dir').value)).expanduser()
-        self.results_dir.mkdir(parents=True, exist_ok=True)
-        self.archive_date = ''
-        self.archive_index = 0
 
         # Synchronization caches for Block B inputs.
         self.images: Dict[int, Image] = {}
@@ -362,10 +360,6 @@ class SocialVlmInteraction(Node):
         self.worker: Optional[threading.Thread] = None
         self.backend: Optional[QwenLoraBackend] = None
 
-        # Visualization state for GUI thread.
-        self.ui_snapshot: Optional[List[np.ndarray]] = None
-        self.ui_raw_json = ''
-        self.ui_latency: Optional[float] = None
 
         camera_qos = QoSProfile(
             history=HistoryPolicy.KEEP_LAST,
@@ -386,6 +380,7 @@ class SocialVlmInteraction(Node):
 
         self.states_pub = self.create_publisher(
             VlmPersonStates, str(self.get_parameter('states_topic').value), 10)
+        # Publish labelled frames for debugging (rqt_image_view or RViz).
         self.labelled_scene_pub = self.create_publisher(
             Image, str(self.get_parameter('labelled_scene_topic').value), camera_qos)
 
@@ -400,27 +395,32 @@ class SocialVlmInteraction(Node):
             self.get_logger().info('VLM interaction node is disabled (enable_vlm=false).')
 
     def _declare_parameters(self) -> None:
-        """Declare ROS parameters with sensible defaults."""
+        """Declare ROS parameters with sensible defaults.
+
+        The default prompt instructs the model to return {"color": ..., "state": ...}
+        so that publish_state_result can directly look up the color in the palette map
+        and recover track_id / person_id without ambiguity.
+        """
         default_prompt = (
-            "You are given 4 sequential images from the same short video clip in temporal order "
-            "(frame 1 -> frame 4).\n"
-            "Each person has a bounding box identified by a color and an ID label.\n"
-            "Examine all 4 images together as one temporal sequence.\n\n"
-            "Assign exactly one state to each person present in the clip.\n\n"
-            "STATE DEFINITIONS\n"
-            '- "walking": a person who is moving or translating.\n'
-            '- "waiting": a person who remains approximately stationary.\n'
-            '- "talking": a person interacting or conversing with another person.\n'
+            'You are given 4 sequential images from the same short video clip in temporal order '
+            '(frame 1 -> frame 4).\n'
+            'Each person has a bounding box labeled "ID <number> (<color>)".\n'
+            'Examine all 4 images together as one temporal sequence.\n\n'
+            'Assign exactly one state to each person.\n\n'
+            'STATE DEFINITIONS\n'
             '- "crossing": moving laterally across the robot forward path.\n'
             '- "approaching": moving toward the robot from the opposite direction.\n'
-            '- "straight": moving in the same direction as the robot, ahead of it.\n\n'
-            "Determine the state from the movement trajectory across the sequence, not from a single frame.\n"
-            'Return only a JSON array with one object per person containing "id" (or "color") and "state".'
+            '- "straight": moving in the same direction as the robot, ahead of it.\n'
+            '- "talking": interacting or conversing with another person.\n\n'
+            'Determine the state from movement trajectory across the sequence, not from a single frame.\n'
+            'Return ONLY a JSON array. Each object must have:\n'
+            '  "ID": the integer number from the bounding box label (e.g. 1, 2),\n'
+            '  "state": one of the states above.\n'
+            'Example: [{"ID": 1, "state": "talking"}, {"ID": 2, "state": "crossing"}]'
         )
 
         for name, value in {
             'enable_vlm': True,
-            'enable_vlm_gui': False,
             'rgb_topic': '/camera/color/image_raw',
             'observations_topic': '/people_observations',
             'people_topic': '/people/tracks',
@@ -431,14 +431,13 @@ class SocialVlmInteraction(Node):
             'vlm_load_in_4bit': True,
             'vlm_require_cuda': True,
             'vlm_device': 'cuda:0',
-            'vlm_max_new_tokens': 128,
+            'vlm_max_new_tokens': 64,
             'vlm_min_pixels': 56 * 56,
-            'vlm_max_pixels': 256 * 28 * 28,
+            'vlm_max_pixels': 128 * 28 * 28,
             'vlm_frame_count': 4,
             'vlm_frame_interval_s': 0.5,
             'sync_cache_size': 12,
             'state_prompt': default_prompt,
-            'results_dir': os.path.expanduser('~/vlm_results'),
         }.items():
             self.declare_parameter(name, value)
 
@@ -512,15 +511,17 @@ class SocialVlmInteraction(Node):
 
         self.update_rolling_buffer(image_msg.header, labelled_image, signature)
 
-    @staticmethod
     def render_labels(
+        self,
         image: np.ndarray,
         observations: PeopleObservations,
         people_msg: People,
     ) -> Tuple[np.ndarray, FrameSignature]:
-        """Render distinct bounding box colors and 'ID <id>' labels for each person.
+        """Render color-coded bounding boxes with 'ID <id> (<color>)' labels.
 
-        This guarantees visual grounding whether the model predicts by ID or by color.
+        Colors are assigned by order of first appearance via ``_track_color_map``
+        so two simultaneously visible tracks always receive distinct colors,
+        regardless of their numeric track_id values.
         """
         labelled = image.copy()
         height, width = labelled.shape[:2]
@@ -541,7 +542,6 @@ class SocialVlmInteraction(Node):
             if right <= left or bottom <= top:
                 continue
 
-            # Deterministic color assignment based on track_id.
             color_index = track_id % len(PALETTE_BGR)
             bgr_color = PALETTE_BGR[color_index]
             color_name = COLOR_NAMES[color_index]
@@ -567,7 +567,7 @@ class SocialVlmInteraction(Node):
         labelled_image: np.ndarray,
         signature: FrameSignature,
     ) -> None:
-        """Append to rolling buffer strictly sampled every 0.5s sim-time."""
+        """Append to rolling buffer strictly sampled every frame_interval_s sim-time."""
         current_stamp_sec = stamp_sec(header)
 
         with self.lock:
@@ -594,15 +594,23 @@ class SocialVlmInteraction(Node):
             if len(self.frame_buffer) < self.frame_count:
                 return
 
-            # Check track signature continuity across all 4 frames.
+            # Check track signature continuity across the 4-frame window.
             all_signatures = [entry.signature for entry in self.frame_buffer]
-            is_clean = bool(all_signatures[0]) and all(
-                s == all_signatures[0] for s in all_signatures[1:]
+            newest_signature = all_signatures[-1]
+            newest_ids = {item.track_id for item in newest_signature}
+
+            # Require that the newest frame has tracks and at least one track
+            # was present in earlier frames so the model has temporal context.
+            # This tolerates single-frame detector flicker while still ensuring
+            # the scene is coherent.
+            has_continuity = bool(newest_ids) and any(
+                bool(newest_ids & {item.track_id for item in s})
+                for s in all_signatures[:-1]
             )
 
-            if not is_clean:
+            if not has_continuity:
                 self.get_logger().warn(
-                    f'Frame buffer track signature changed across 4-frame window; skipping.',
+                    f'Frame buffer lacks track continuity for {sorted(newest_ids)}; skipping.',
                     throttle_duration_sec=2.0,
                 )
                 return
@@ -658,24 +666,14 @@ class SocialVlmInteraction(Node):
 
             latency = time.monotonic() - t_start
             self.publish_state_result(job, raw_response)
-
             self.get_logger().info(f'VLM latency = {latency:.2f} s')
-            if self.gui_enabled:
-                with self.lock:
-                    self.ui_snapshot = job.images
-                    self.ui_raw_json = raw_response
-                    self.ui_latency = latency
 
-            try:
-                self.save_result_visualization(job.images, raw_response, latency)
-            except Exception as err:
-                self.get_logger().warn(f'Failed to save VLM result visualization: {err}')
-            finally:
-                with self.lock:
-                    self.is_busy = False
+            with self.lock:
+                self.is_busy = False
 
     @staticmethod
-    def _parse_json_array(response: str):
+    def _parse_json_array(response: str) -> list:
+        """Extract the first JSON array from a model response string."""
         start = response.find('[')
         end = response.rfind(']')
         if start < 0 or end < start:
@@ -687,14 +685,31 @@ class SocialVlmInteraction(Node):
         return payload if isinstance(payload, list) else []
 
     def publish_state_result(self, job: SceneWork, raw_response: str) -> None:
-        """Parse predictions and map back to stable ByteTrack IDs."""
+        """Parse color+state pairs from the model and map to stable ByteTrack identities.
+
+        The fine-tuned Qwen2-VL model returns objects like {"color": "green", "state": "talking"}.
+        The color is the grounding key rendered on every bounding box label.  This method
+        looks up the color in the palette map to recover track_id and person_id, then
+        publishes VlmPersonStates so that semantic_fusion.py can join them via person_id.
+
+        Fallback: any tracked person whose color is absent in the model response is published
+        with state="unknown", which semantic_fusion ignores.
+        """
+        # Build a color -> identity lookup from the job's rendered palette.
+        color_map: Dict[str, TrackIdentity] = {
+            item.color_name.lower(): item for item in job.signature
+        }
+        # Also support numeric ID as a secondary fallback in case the model uses it.
         id_map: Dict[int, TrackIdentity] = {item.track_id: item for item in job.signature}
-        color_map: Dict[str, TrackIdentity] = {item.color_name.lower(): item for item in job.signature}
 
         output = VlmPersonStates()
         output.header = job.observation_header
         output.inference_stamp = self.get_clock().now().to_msg()
         output.raw_response = raw_response
+
+        self.get_logger().info(
+            f'VLM raw: {raw_response!r} | '
+            f'ids={list(id_map.keys())} colors={list(color_map.keys())}')
 
         resolved_tracks: Set[int] = set()
 
@@ -706,35 +721,40 @@ class SocialVlmInteraction(Node):
                 continue
 
             identity: Optional[TrackIdentity] = None
-            # Support both numeric ID and color name resolutions.
-            if 'id' in item:
-                try:
-                    parsed_id = int(item['id'])
-                    identity = id_map.get(parsed_id)
-                except (TypeError, ValueError):
-                    pass
 
+            # Primary route: model returns {"ID": 1, "state": ...} — numeric int.
+            # Check both "ID" and "id" keys (case-insensitive).
+            id_val = item.get('ID', item.get('id'))
+            if id_val is not None:
+                try:
+                    identity = id_map.get(int(id_val))
+                except (TypeError, ValueError):
+                    # Model put a string (e.g. color name) in the ID field — try color map.
+                    identity = color_map.get(str(id_val).strip().lower())
+
+            # Fallback: model returns {"color": "green", "state": ...}.
             if identity is None and 'color' in item:
-                parsed_color = str(item['color']).strip().lower()
-                identity = color_map.get(parsed_color)
+                identity = color_map.get(str(item['color']).strip().lower())
 
             if identity is None or identity.track_id in resolved_tracks:
                 continue
 
             person_state = VlmPersonState()
             person_state.track_id = int(identity.track_id)
-            person_state.person_id = identity.person_id
+            person_state.person_id = identity.person_id  # used by semantic_fusion.py
+            person_state.color = identity.color_name      # raw model grounding key
             person_state.state = state
             output.states.append(person_state)
             resolved_tracks.add(identity.track_id)
 
-        # Fallback to unknown for tracked persons not mentioned in the model output.
+        # Publish unknown for any tracked person not mentioned in the model output.
         for identity in job.signature:
             if identity.track_id in resolved_tracks:
                 continue
             person_state = VlmPersonState()
             person_state.track_id = int(identity.track_id)
             person_state.person_id = identity.person_id
+            person_state.color = identity.color_name
             person_state.state = 'unknown'
             output.states.append(person_state)
 
@@ -743,85 +763,10 @@ class SocialVlmInteraction(Node):
             f'Published VLM states: {len(resolved_tracks)}/{len(job.signature)} resolved '
             f'from frame {output.header.stamp.sec}.{output.header.stamp.nanosec:09d}')
 
-    def compose_visualization(
-        self,
-        images: List[np.ndarray],
-        raw_json: str,
-        latency: Optional[float],
-    ) -> np.ndarray:
-        """Compose a 2x2 grid with an informative bottom diagnostic banner."""
-        target_w, target_h = 400, 225
-        resized_imgs = []
-
-        for i, img in enumerate(images):
-            resized = cv2.resize(img, (target_w, target_h))
-            label = f'Frame {i + 1} (t={i * self.frame_interval_s:.1f}s)'
-            cv2.rectangle(resized, (5, 5), (170, 30), (0, 0, 0), -1)
-            cv2.putText(resized, label, (10, 23), cv2.FONT_HERSHEY_SIMPLEX, 0.55, (0, 255, 255), 2)
-            resized_imgs.append(resized)
-
-        top_row = np.hstack([resized_imgs[0], resized_imgs[1]])
-        bottom_row = np.hstack([resized_imgs[2], resized_imgs[3]])
-        grid = np.vstack([top_row, bottom_row])
-
-        banner_h = 190
-        banner = np.zeros((banner_h, grid.shape[1], 3), dtype=np.uint8)
-
-        lat_text = f'VLM Latency: {latency:.2f} s' if latency is not None else 'VLM Latency: --'
-        cv2.putText(banner, lat_text, (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.65, (0, 255, 0), 2)
-        cv2.putText(banner, 'RAW JSON OUTPUT (+ token confidence):', (10, 60),
-                    cv2.FONT_HERSHEY_SIMPLEX, 0.55, (255, 255, 255), 1)
-
-        clean_json = raw_json.replace('\n', ' ')
-        max_chars = 95
-        lines = [clean_json[i:i + max_chars] for i in range(0, len(clean_json), max_chars)]
-        y_offset = 88
-        for line in lines[:5]:
-            cv2.putText(banner, line, (10, y_offset), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (200, 200, 200), 1)
-            y_offset += 20
-
-        return np.vstack([grid, banner])
-
-    def render_visualization(
-        self,
-        images: List[np.ndarray],
-        raw_json: str,
-        latency: Optional[float],
-    ) -> None:
-        combined = self.compose_visualization(images, raw_json, latency)
-        cv2.imshow('VLM Interaction 4-Frame Window', combined)
-        cv2.waitKey(1)
-
-    def next_result_path(self) -> Path:
-        date_code = datetime.now().strftime('%m%d')
-        if date_code != self.archive_date:
-            existing = []
-            for path in self.results_dir.glob(f'vlm_{date_code}_*.png'):
-                suffix = path.stem.rsplit('_', 1)[-1]
-                if suffix.isdigit():
-                    existing.append(int(suffix))
-            self.archive_date = date_code
-            self.archive_index = max(existing, default=0)
-
-        self.archive_index += 1
-        return self.results_dir / f'vlm_{date_code}_{self.archive_index:04d}.png'
-
-    def save_result_visualization(
-        self,
-        images: List[np.ndarray],
-        raw_json: str,
-        latency: float,
-    ) -> None:
-        output_path = self.next_result_path()
-        combined = self.compose_visualization(images, raw_json, latency)
-        cv2.imwrite(str(output_path), combined)
-
     def destroy_node(self):
         self.stop_event.set()
         if self.worker is not None:
             self.worker.join(timeout=1.0)
-        if self.gui_enabled:
-            cv2.destroyAllWindows()
         return super().destroy_node()
 
 
@@ -833,38 +778,14 @@ def main(args: Optional[List[str]] = None) -> None:
     executor = MultiThreadedExecutor(num_threads=2)
     executor.add_node(node)
 
-    ros_thread: Optional[threading.Thread] = None
     try:
-        if not node.gui_enabled:
-            executor.spin()
-        else:
-            ros_thread = threading.Thread(
-                target=executor.spin,
-                name='ros-executor',
-                daemon=True,
-            )
-            ros_thread.start()
-
-            while rclpy.ok() and not node.stop_event.is_set():
-                with node.lock:
-                    snapshot = node.ui_snapshot
-                    raw_json = node.ui_raw_json
-                    latency = node.ui_latency
-
-                if snapshot is not None and len(snapshot) == node.frame_count:
-                    node.render_visualization(snapshot, raw_json, latency)
-
-                key = cv2.waitKey(30) & 0xFF
-                if key == 27:  # ESC key
-                    break
+        executor.spin()
     except KeyboardInterrupt:
         pass
     finally:
         node.stop_event.set()
         executor.shutdown()
         node.destroy_node()
-        if ros_thread is not None:
-            ros_thread.join(timeout=1.0)
         if rclpy.ok():
             rclpy.shutdown()
 
