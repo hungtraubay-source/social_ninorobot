@@ -65,7 +65,9 @@ class VlmStateCache:
             # is monotonically increasing (wall clock), so a simple comparison
             # is sufficient; no special clock-reset handling is needed here.
             if previous is None or inference_stamp >= previous[0]:
-                self._states[person_id] = (inference_stamp, state)
+                confidence = min(1.0, max(
+                    0.0, float(getattr(item, 'confidence', 0.0))))
+                self._states[person_id] = (inference_stamp, state, confidence)  # Store the timestamp for freshness checks, not for display.
 
         # Prune entries older than timeout relative to the current inference batch.
         self._states = {
@@ -87,5 +89,5 @@ class VlmStateCache:
             # Allow small negative values (≤5 s) to tolerate slight clock skew
             # between the VLM publish stamp and the people topic stamp.
             return '', 0.0
-        return entry[1], 1.0
+        return entry[1], entry[2]  # Return the scene type and confidence.
 
