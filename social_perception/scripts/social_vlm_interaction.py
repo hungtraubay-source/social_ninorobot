@@ -414,9 +414,11 @@ class SocialVlmInteraction(Node):
             '- "talking": interacting or conversing with another person.\n\n'
             'Determine the state from movement trajectory across the sequence, not from a single frame.\n'
             'Return ONLY a JSON array. Each object must have:\n'
-            '  "ID": the integer number from the bounding box label (e.g. 1, 2),\n'
+            '  "color": the color name from the bounding box label '
+            '(green, blue, red, yellow, or magenta),\n'
             '  "state": one of the states above.\n'
-            'Example: [{"ID": 1, "state": "talking"}, {"ID": 2, "state": "crossing"}]'
+            'Example: [{"color": "green", "state": "talking"}, '
+            '{"color": "blue", "state": "crossing"}]'
         )
 
         for name, value in {
@@ -746,6 +748,13 @@ class SocialVlmInteraction(Node):
             person_state.state = state
             output.states.append(person_state)
             resolved_tracks.add(identity.track_id)
+            person_state.confidence = confidence
+
+            try:
+                confidence = min(1.0, max(
+                    0.0, float(item.get('confidence', 0.0))))
+            except (TypeError, ValueError):
+                confidence = 0.0
 
         # Publish unknown for any tracked person not mentioned in the model output.
         for identity in job.signature:
@@ -757,6 +766,7 @@ class SocialVlmInteraction(Node):
             person_state.color = identity.color_name
             person_state.state = 'unknown'
             output.states.append(person_state)
+            person_state.confidence = 0.0
 
         self.states_pub.publish(output)
         self.get_logger().info(

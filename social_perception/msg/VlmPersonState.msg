@@ -13,3 +13,5 @@ string color
 # treat this as semantic metadata; pose, velocity, and safety geometry remain
 # owned by the RGB-D/ByteTrack perception pipeline.
 string state
+
+float32 confidence

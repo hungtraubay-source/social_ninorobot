@@ -35,7 +35,7 @@ social_vlm_interaction:
     vlm_frame_interval_s: 0.5
     sync_cache_size: 12
 
-    # Prompt asks for numeric ID (from the bounding box label "ID <n> (<color>)") and state.
-    # The parser handles both "ID" and "id" keys, and falls back to color if needed.
+    # Prompt matches the fine-tuned color + state contract. The node maps this
+    # color back to the current ByteTrack person_id before publishing the result.
     state_prompt: >
-      You are given 4 sequential images from the same short video clip in temporal order (frame 1 → frame 4).\nEach person has a bounding box labeled "ID <number> (<color>)".\nExamine all 4 images together as one temporal sequence.\nAssign exactly one state to each person.\nSTATE DEFINITIONS\n- "crossing": moving laterally across the robot forward path.\n- "approaching": moving toward the robot from the opposite direction.\n- "straight": moving in the same direction as the robot, ahead of it.\n- "talking": interacting or conversing with another person.\nDetermine the state from movement trajectory across the sequence, not from a single frame.\nReturn ONLY a JSON array. Each object must have "ID" (integer from the label, e.g. 1 or 2) and "state".\nExample: [{"ID": 1, "state": "talking"}, {"ID": 2, "state": "crossing"}]
+      You are given 4 sequential images from the same short video clip in temporal order (frame 1 → frame 4).\nEach person has a bounding box labeled "ID <number> (<color>)".\nExamine all 4 images together as one temporal sequence.\nAssign exactly one state to each person.\nSTATE DEFINITIONS\n- "crossing": moving laterally across the robot forward path.\n- "approaching": moving toward the robot from the opposite direction.\n- "straight": moving in the same direction as the robot, ahead of it.\n- "talking": interacting or conversing with another person.\nDetermine the state from movement trajectory across the sequence, not from a single frame.\nReturn ONLY a JSON array. Each object must have "color" (the color from that person's bounding-box label: green, blue, red, yellow, or magenta) and "state".\nExample: [{"color": "green", "state": "talking"}, {"color": "blue", "state": "crossing"}]
