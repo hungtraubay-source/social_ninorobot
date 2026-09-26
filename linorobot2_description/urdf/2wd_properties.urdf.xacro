@@ -12,8 +12,8 @@
   <xacro:property name="wheel_pos_z" value="0.0325" />
   <xacro:property name="wheel_mass" value="0.7181" />
   <xacro:property name="wheel_torque" value="0.43" />
-  <xacro:property name="front_caster_wheel" value="false" />
-  <xacro:property name="rear_caster_wheel" value="false" />
+  <xacro:property name="front_caster_wheel" value="true" />
+  <xacro:property name="rear_caster_wheel" value="true" />
   <xacro:property name="wheel_coast" value="-0.0263800000000001" />
 
   <xacro:property name="laser_pose">

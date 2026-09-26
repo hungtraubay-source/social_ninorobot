@@ -572,8 +572,8 @@ Visualization Manager:
       Enabled: true
       Name: MarkerArray
       Namespaces:
-        vlm_talking_social_zone: true
-        vlm_talking_social_zone_label: true
+        rl_constraint_field: true
+        rl_constraint_field_label: true
       Topic:
         Depth: 5
         Durability Policy: Volatile

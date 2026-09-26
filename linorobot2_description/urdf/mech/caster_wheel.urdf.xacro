@@ -6,25 +6,18 @@
     <xacro:if value="${side == 'front'}">
       <xacro:property name="caster_wheel_radius" value="0.0325" />
       <xacro:property name="caster_wheel_x" value="-0.0773955999155658" /> <!-- banh sau -->
-      <xacro:property name="caster_wheel_mass" value="1.7181" />
-      <xacro:property name="caster_mesh_file" value="front_caster_wheel.STL" />
-      <xacro:property name="caster_wheel_z" value="-0.026800000000001" />
     </xacro:if>
     
     <!-- REAR WHEEL CONFIG -->
     <xacro:if value="${side == 'rear'}">
       <xacro:property name="caster_wheel_radius" value="0.0325" />
       <xacro:property name="caster_wheel_x" value="0.0639497590100105" />
-      <xacro:property name="caster_wheel_mass" value="1.7191" />
-      <xacro:property name="caster_mesh_file" value="rear_caster_wheel.STL" />
-      <xacro:property name="caster_wheel_z" value="-0.026803000000001" />
     </xacro:if>
     
     <link name="${side}_caster_wheel_link">
       <visual>
-        <origin xyz="0 0 ${caster_wheel_z}" rpy="0 0 0"/>  <!-- ✅ Để ở (0,0,0) -->
         <geometry>
-            <mesh filename="file://$(find linorobot2_description)/meshes/${caster_mesh_file}" scale="1 1 1"/>
+          <sphere radius="${caster_wheel_radius}"/>
         </geometry>
         <material name="white">
           <color rgba="1.0 1.0 1.0 1.0"/>
@@ -40,10 +33,10 @@
 
       <inertial>
         <origin xyz="0 0 0" rpy="0 0 0"/>
-        <mass value="${caster_wheel_mass}"/>
-        <inertia ixx="${(2/5) * caster_wheel_mass * (caster_wheel_radius * caster_wheel_radius)}" ixy="0" ixz="0"
-                 iyy="${(2/5) * caster_wheel_mass * (caster_wheel_radius * caster_wheel_radius)}" iyz="0"
-                 izz="${(2/5) * caster_wheel_mass * (caster_wheel_radius * caster_wheel_radius)}" />
+        <mass value="${mass}"/>
+        <inertia ixx="${(2/5) * mass * (caster_wheel_radius * caster_wheel_radius)}" ixy="0" ixz="0"
+                 iyy="${(2/5) * mass * (caster_wheel_radius * caster_wheel_radius)}" iyz="0"
+                 izz="${(2/5) * mass * (caster_wheel_radius * caster_wheel_radius)}" />
       </inertial>
     </link>
 

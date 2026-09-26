@@ -581,7 +581,8 @@ class PerceptionBridge:
     """Latest /scan, /people and /odom, expressed in the robot frame."""
 
     def __init__(self, node, tf_buffer, env_config, observation_config,
-                 people_provider=None):
+                 people_provider=None, subscribe_motion=True,
+                 subscribe_social=True):
         self._node = node
         self._tf_buffer = tf_buffer
         self._env = env_config
@@ -610,20 +611,24 @@ class PerceptionBridge:
         self.people = None
         self.odom = None
         self.people_transform_valid = True
-        node.create_subscription(LaserScan, env_config.scan_topic,
-                                 self._on_scan, sensor_qos)
-        node.create_subscription(People, env_config.people_topic,
-                                 self._on_people, 10)
-        node.create_subscription(Odometry, env_config.odom_topic,
-                                 self._on_odom, sensor_qos)
-        if self._people_provider is None:
-            node.create_subscription(VlmPersonStates, env_config.vlm_states_topic,
-                                     self._on_vlm_states, 10)
+        self.constraint_field = None
+        if subscribe_motion:
+            node.create_subscription(LaserScan, env_config.scan_topic,
+                                     self._on_scan, sensor_qos)
+            node.create_subscription(Odometry, env_config.odom_topic,
+                                     self._on_odom, sensor_qos)
+        if subscribe_social:
+            node.create_subscription(People, env_config.people_topic,
+                                     self._on_people, 10)
+            if self._people_provider is None:
+                node.create_subscription(
+                    VlmPersonStates, env_config.vlm_states_topic,
+                    self._on_vlm_states, 10)
 
         # Block D no longer publishes from here. In training the field is an
         # in-process grid (constraint_field.py) that feeds the observation and
-        # the reward directly; on the robot the Gaussian grounding node in
-        # social_perception owns the field and its markers.
+        # reward directly; deployment uses a separate continuous field node
+        # so visualization and grounding do not depend on a navigation goal.
 
     def _on_scan(self, msg):
         self.scan = msg
@@ -799,6 +804,59 @@ class PerceptionBridge:
         """Drop the memory of everybody. Called between episodes."""
         self._memory.clear()
 
+    def reset_deployment_grounding(self):
+        """Start a fresh deploy grounding cycle after a locked field expires."""
+        if self._people_provider is not None:
+            raise RuntimeError(
+                'reset_deployment_grounding is only for tracker input')
+        self._memory.clear()
+        self._vlm_states.clear()
+        self.constraint_field = None
+
+    def deployment_constraint_field(self):
+        """Compile the live deploy field without requiring a navigation
+        goal."""
+        if self._people_provider is not None:
+            raise RuntimeError(
+                'deployment_constraint_field is only for tracker input')
+        # Memory is stored in goal_frame exactly as in observe(), so people do
+        # not move with the robot while temporarily outside the camera.
+        goal_transform = self.goal_transform()
+        people = self.relative_people()
+        if not self.people_transform_valid:
+            raise RuntimeError(
+                'tracked people cannot be transformed into the robot frame')
+        now = self._node.get_clock().now().nanoseconds * 1e-9
+        people = self._memory.remember(people, goal_transform, now)
+        field = compile_zones(people, self._observation.constraint_field)
+        self.constraint_field = field
+        return field
+
+    def observe_with_field(self, goal_map_x: float, goal_map_y: float, field):
+        """Build a deploy observation from an externally supplied field."""
+        if self.scan is None:
+            raise RuntimeError(f'no message on {self._env.scan_topic} yet')
+        goal_transform = self.goal_transform()
+        goal_x, goal_y = transform_point(
+            goal_transform, goal_map_x, goal_map_y)
+        scan_xy, scan_ranges = self.scan_returns()
+        linear, angular = self.robot_velocity()
+        observation = build_observation(
+            ObservationInput(
+                scan_points=scan_xy,
+                goal_x=goal_x,
+                goal_y=goal_y,
+                linear=linear,
+                angular=angular),
+            self._observation,
+            field)
+        state = {
+            'goal_distance': math.hypot(goal_x, goal_y),
+            'goal_bearing': math.atan2(goal_y, goal_x),
+            'minimum_scan': self.minimum_scan(scan_ranges),
+        }
+        return observation, state
+
     def observe(self, goal_map_x: float, goal_map_y: float):
         """Build the policy input and the raw quantities the reward needs."""
         if self.scan is None:
@@ -858,6 +916,7 @@ class PerceptionBridge:
         # Block D. The channels come off `shown`, so the policy sees exactly
         # the situation its perception describes -- including a misread one.
         field = compile_zones(shown, self._observation.constraint_field)
+        self.constraint_field = field
         observation = build_observation(
             ObservationInput(scan_points=scan_xy,
                              goal_x=goal_x, goal_y=goal_y,

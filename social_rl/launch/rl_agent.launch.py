@@ -13,11 +13,11 @@ the checkpoint keeps driving in the frame it was trained in.
   RViz 2D Goal Pose -> /rl_goal_pose -> agent -> /cmd_vel -> safety filter
   map_server + AMCL -> TF map -> odom (nothing else)
 
-people:=ground_truth points the agent at /social_gt/people instead of /people,
-for testing a trained policy in simulation while block C does not exist yet.
-The policy then reads the SAME labels it trained on -- scene_type filled, one
-stable id per person -- so a bad run is the policy's fault rather than a
-missing VLM's. It is not a second people source: same message type, same
+people:=ground_truth points the deploy field node at /social_gt/people instead
+of /people, for testing a trained policy in simulation while block C does not
+exist yet. The policy then reads the SAME labels it trained on -- scene_type
+filled, one stable id per person -- so a bad run is the policy's fault rather
+than a missing VLM's. It is not a second people source: same message type, same
 subscription, same camera-cone and occlusion filtering in the bridge; only the
 topic name changes, and social_rl/ground_truth.py stays out of the agent.
 
@@ -85,6 +85,7 @@ def generate_launch_description():
                 'goal_topic': LaunchConfiguration('goal_topic'),
                 'env_config': LaunchConfiguration('env_config'),
                 'people_topic_override': people_topic_override,
+                'constraint_field_topic': '/social_rl/constraint_field',
             }])
 
     def amcl(params_file, wanted_sim):
@@ -138,12 +139,8 @@ def generate_launch_description():
                         'cấu hình quan sát của chính checkpoint'),
         DeclareLaunchArgument(
             'zones', default_value='true',
-            description='Vẽ VLM-confirmed talking hard zones ra '
-                        '/social_rl/zone_markers cho RViz'),
-        DeclareLaunchArgument(
-            'prediction_times', default_value='[0.0]',
-            description='Mốc thời gian của K_soc đem vẽ. Mặc định chỉ hiện '
-                        'tại; [0.0,1.0,2.0] để soi cả dự báo'),
+            description='Vẽ ConstraintField deploy liên tục, độc lập goal, '
+                        'ra /social_rl/zone_markers'),
         DeclareLaunchArgument(
             'goal_topic', default_value='/rl_goal_pose',
             description='Where the agent listens for goals. Point the RViz '
@@ -179,22 +176,23 @@ def generate_launch_description():
             parameters=[{'use_sim_time': ParameterValue(sim, value_type=bool)}],
             condition=IfCondition(LaunchConfiguration('rviz'))),
 
-        agent(sim_config, IfCondition(sim)),
-        agent(real_config, UnlessCondition(sim)),
-
-        # Render the talking o-space from the exact VLM + People topics that
-        # feed deployment. This is visualization only; it never publishes a
-        # velocity command or changes the PPO observation.
         Node(
             package='social_rl',
-            executable='vlm_zone_visualizer',
-            name='vlm_zone_visualizer',
+            executable='constraint_field_node',
+            name='social_rl_constraint_field',
             output='screen',
             parameters=[{
                 'use_sim_time': ParameterValue(sim, value_type=bool),
                 'model_path': model_path,
                 'env_config': LaunchConfiguration('env_config'),
                 'people_topic_override': people_topic_override,
-            }],
-            condition=IfCondition(LaunchConfiguration('zones'))),
+                'field_topic': '/social_rl/constraint_field',
+                'publish_zone_markers': ParameterValue(
+                    LaunchConfiguration('zones'), value_type=bool),
+                'zone_markers_topic': '/social_rl/zone_markers',
+            }]),
+
+        agent(sim_config, IfCondition(sim)),
+        agent(real_config, UnlessCondition(sim)),
+
     ])

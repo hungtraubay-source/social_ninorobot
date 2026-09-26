@@ -26,8 +26,8 @@ setup(
         'console_scripts': [
             'train_rl = social_rl.train:main',
             'rl_agent = social_rl.agent_node:main',
+            'constraint_field_node = social_rl.constraint_field_node:main',
             'zone_markers = social_rl.zone_markers:main',
-            'vlm_zone_visualizer = social_rl.vlm_zone_visualizer:main',
         ],
     },
 )

@@ -9,3 +9,6 @@ __pycache__/
 
 CLAUDE.md
 Saved_Model/
+.vscode/
+*.orig
+unsloth_compiled_cache/

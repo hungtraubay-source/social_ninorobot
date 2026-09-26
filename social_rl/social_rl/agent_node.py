@@ -1,8 +1,9 @@
 """Run a trained Recurrent PPO policy as an ordinary ROS 2 velocity node.
 
-Nothing simulation-specific is imported here: it subscribes to /scan, /people,
-/odom and a goal topic and publishes a Twist, so the same node and the same
-.zip run on the robot. Point it at a different config file (rl_agent_real.yaml) and the
+Nothing simulation-specific is imported here: it subscribes to /scan, /odom,
+the deploy ConstraintField and a goal, then publishes a Twist. The same node
+and the same .zip run on the robot. Point it at a different config file
+(rl_agent_real.yaml) and the
 only things that change are use_sim_time and the cmd_vel topic.
 
 The policy is the only controller: it drives the whole route and avoids both
@@ -14,21 +15,46 @@ memoryless one -- it would still drive, just without the memory of a person it
 can no longer see, which is the part that was trained.
 """
 
+import importlib
 import os
+import sys
 
 from geometry_msgs.msg import PoseStamped, Twist
 import numpy as np
 import rclpy
 from rclpy.node import Node
 from sb3_contrib import RecurrentPPO
+from std_msgs.msg import String
 from tf2_ros import Buffer, TransformException, TransformListener
 import yaml
 
+from social_rl.field_transport import field_from_json
 from social_rl.observation import (VECTOR_FEATURES,
                                    ObservationConfig)
 from social_rl.reward import RewardConfig
 from social_rl.ros_interface import (EnvConfig, PerceptionBridge,
                                      scale_action, transform_point)
+
+
+def _install_numpy_checkpoint_compat():
+    """Expose NumPy 2 pickle module names when running NumPy 1.x."""
+    try:
+        importlib.import_module('numpy._core')
+        return False
+    except ModuleNotFoundError as error:
+        if error.name != 'numpy._core':
+            raise
+
+    # NumPy 2 renamed its private ``core`` package to ``_core``. Checkpoints
+    # saved there retain those private names in cloudpickle even though the
+    # ndarray representation is still readable by NumPy 1.x.
+    numpy_core = importlib.import_module('numpy.core')
+    sys.modules.setdefault('numpy._core', numpy_core)
+    for module_name in (
+            '_multiarray_umath', 'multiarray', 'numeric', 'umath'):
+        module = importlib.import_module(f'numpy.core.{module_name}')
+        sys.modules.setdefault(f'numpy._core.{module_name}', module)
+    return True
 
 
 class SocialRlAgent(Node):
@@ -68,6 +94,10 @@ class SocialRlAgent(Node):
         # VLM. Set cuda:0 only if you have measured a reason to.
         self.declare_parameter('device', 'cpu')
         self.declare_parameter('deterministic', True)
+        # The deploy field is owned by a separate continuous node. This agent
+        # only consumes its newest snapshot when a goal is active.
+        self.declare_parameter(
+            'constraint_field_topic', '/social_rl/constraint_field')
 
         model_path = os.path.expanduser(
             str(self.get_parameter('model_path').value))
@@ -147,8 +177,17 @@ class SocialRlAgent(Node):
                 'block C reports, empty if no VLM is running.')
         self._bridge = PerceptionBridge(self, self._tf_buffer,
                                         self._env_config,
-                                        self._observation_config)
+                                        self._observation_config,
+                                        subscribe_social=False)
         self._cmd_pub = self.create_publisher(Twist, self._cmd_vel_topic, 10)
+        self._constraint_field = None
+        self._constraint_field_received_ns = None
+        self._constraint_field_timeout = max(
+            0.5, 2.5 * self._env_config.control_period)
+        field_topic = str(
+            self.get_parameter('constraint_field_topic').value)
+        self.create_subscription(
+            String, field_topic, self._on_constraint_field, 10)
         self._lstm_states = None
         self._episode_start = True
         self._goal = None
@@ -159,6 +198,10 @@ class SocialRlAgent(Node):
         self.create_subscription(PoseStamped, goal_topic, self._on_goal, 10)
 
         device = str(self.get_parameter('device').value)
+        if _install_numpy_checkpoint_compat():
+            self.get_logger().info(
+                'enabled NumPy 2 checkpoint compatibility for this load; '
+                f'runtime NumPy is {np.__version__}')
         self._model = RecurrentPPO.load(model_path, device=device)
 
         self.create_timer(self._env_config.control_period, self._control_step)
@@ -172,6 +215,24 @@ class SocialRlAgent(Node):
             f'{self._cmd_vel_topic}'
             f'; goal frame {self._env_config.goal_frame}. Waiting on '
             f'{goal_topic}.')
+
+    def _on_constraint_field(self, message: String):
+        try:
+            field = field_from_json(message.data)
+        except (KeyError, TypeError, ValueError) as error:
+            self.get_logger().warn(
+                f'invalid deploy ConstraintField: {error}',
+                throttle_duration_sec=5.0)
+            return
+        if field.frame != self._observation_config.robot_frame:
+            self.get_logger().error(
+                f'ConstraintField frame "{field.frame}" does not match '
+                f'observation frame "{self._observation_config.robot_frame}"',
+                throttle_duration_sec=5.0)
+            return
+        self._constraint_field = field
+        self._constraint_field_received_ns = (
+            self.get_clock().now().nanoseconds)
 
     def _on_goal(self, msg: PoseStamped):
         frame = msg.header.frame_id or self._env_config.goal_frame
@@ -229,18 +290,27 @@ class SocialRlAgent(Node):
                 throttle_duration_sec=5.0)
             self.stop()
             return
-        try:
-            observation, state = self._bridge.observe(
-                self._goal[0], self._goal[1])
-        except RuntimeError as error:
-            self.get_logger().warn(str(error), throttle_duration_sec=5.0)
+        if self._constraint_field_received_ns is None:
+            self.get_logger().warn(
+                'no deploy ConstraintField yet, holding still',
+                throttle_duration_sec=5.0)
             self.stop()
             return
-        if not state['people_transform_valid']:
-            self.get_logger().error(
-                'tracked people cannot be transformed into the robot frame; '
-                'holding still instead of treating them as absent',
-                throttle_duration_sec=2.0)
+        field_age = (
+            self.get_clock().now().nanoseconds
+            - self._constraint_field_received_ns) * 1e-9
+        if field_age < 0.0 or field_age > self._constraint_field_timeout:
+            self.get_logger().warn(
+                f'deploy ConstraintField is {field_age:+.3f} s old, '
+                'holding still',
+                throttle_duration_sec=5.0)
+            self.stop()
+            return
+        try:
+            observation, state = self._bridge.observe_with_field(
+                self._goal[0], self._goal[1], self._constraint_field)
+        except RuntimeError as error:
+            self.get_logger().warn(str(error), throttle_duration_sec=5.0)
             self.stop()
             return
 

@@ -10,10 +10,12 @@
   <depend>std_srvs</depend>
   <depend>geometry_msgs</depend>
   <depend>sensor_msgs</depend>
+  <depend>std_msgs</depend>
   <depend>gazebo_msgs</depend>
   <depend>robot_localization</depend>
   <depend>social_perception</depend>
   <depend>tf2_ros</depend>
+  <depend>visualization_msgs</depend>
 
   <exec_depend>linorobot2_navigation</exec_depend>
   <exec_depend>nav2_bringup</exec_depend>

@@ -10,7 +10,7 @@ ros2 launch linorobot2_gazebo gazebo.launch.py \
   run_ekf:=true \
   spawn_x:=-3.0 \
   spawn_y:=0.0 \
-  spawn_z:=0.0 \
+  spawn_z:=0.05 \
   spawn_yaw:=0.0 \
   publish_odom_tf:=false
 

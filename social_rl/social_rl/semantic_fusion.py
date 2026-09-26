@@ -42,6 +42,10 @@ class VlmStateCache:
         self._timeout = float(timeout)
         self._states = {}
 
+    def clear(self) -> None:
+        """Discard all labels so grounding must wait for a later VLM result."""
+        self._states.clear()
+
     def update(self, message) -> None:
         """Store only recognized semantic labels from one VLM result."""
         # Use inference_stamp (publish time) so freshness is measured from when
@@ -88,4 +92,3 @@ class VlmStateCache:
             # between the VLM publish stamp and the people topic stamp.
             return '', 0.0
         return entry[1], 1.0
-

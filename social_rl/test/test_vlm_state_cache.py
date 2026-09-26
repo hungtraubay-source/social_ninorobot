@@ -84,6 +84,16 @@ def test_talking_result_survives_the_measured_qwen_latency():
     assert cache.lookup('person_1', _header(152.1)) == ('', 0.0)
 
 
+def test_clear_requires_a_new_vlm_result():
+    cache = VlmStateCache(timeout=25.0)
+    cache.update(_result(10.0, ('person_1', 'talking')))
+    assert cache.lookup('person_1', _header(11.0)) == ('talking', 1.0)
+
+    cache.clear()
+
+    assert cache.lookup('person_1', _header(11.0)) == ('', 0.0)
+
+
 def test_single_talking_person_creates_individual_zone():
     field = compile_zones([
         RelativeEntity(1.0, 0.0, scene_type='talking', track_id='person_1',
@@ -97,4 +107,3 @@ def test_single_talking_person_creates_individual_zone():
     assert zone.track_ids == ('person_1',)
     assert zone.trajectory_of_zone[0].center == (1.0, 0.0)
     assert zone.trajectory_of_zone[0].orientation == 0.5
-

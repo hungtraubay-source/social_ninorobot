@@ -1,4 +1,6 @@
 # Runtime dependency for the active RGB-D + YOLO Pose social-geometry pipeline.
+# Keep the ROS Humble cv_bridge/SciPy ABI compatible while satisfying YOLO.
+numpy>=1.23,<1.25
 ultralytics>=8.0
 
 # Optional dependencies for the separate social_vlm_interaction node. Install
