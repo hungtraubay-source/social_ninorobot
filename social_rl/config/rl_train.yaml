@@ -582,17 +582,29 @@ env:
   # 0.7-0.9 -> 0.5-0.6 (xem animated_people_release.cpp). So với điều kiện đã
   # train ra 230352 thì CHỈ offset đổi. Lưu ý: --eval mặc định giờ cũng dùng
   # 0.5-0.6, không còn so ngang hàng được với các con số eval 0.7-0.9 cũ.
+  #
+  # 40/60 -> 30/70 (23-09-2026, theo yêu cầu). Chỉ đổi tỷ lệ scenario: 3/10
+  # tập không có người để giữ kỹ năng lái tới đích, 7/10 tập `talking` để tăng
+  # mật độ học tránh cặp người. Giữ nguyên goal, reward và learning_rate.
+  #
+  # 30/70 talking -> 40/60 waiting (28-09-2026, theo yêu cầu). Đổi TOÀN BỘ
+  # tình huống từ `talking` sang `waiting`: 4/10 tập không có người để giữ kỹ
+  # năng lái tới đích, 6/10 tập `waiting` (một người đứng trước kệ, goal cố
+  # định env.waiting_routes). `talking` KHÔNG còn trong danh sách nên kỹ năng né
+  # cặp người không được củng cố nữa - xem lại talking_goal bằng --eval sau
+  # khi train. Resume từ 412852 (run 20260920_235537). Kịch bản `waiting` mới
+  # viết 28-09-2026, CHƯA nhìn bằng mắt trong Gazebo khi ghi dòng này.
   scenarios:
     - none
     - none
     - none
     - none
-    - talking
-    - talking
-    - talking
-    - talking
-    - talking
-    - talking
+    - waiting
+    - waiting
+    - waiting
+    - waiting
+    - waiting
+    - waiting
   scenario_settle_time: 0.6
 
   # Toạ độ trong frame `map` (robot spawn ở world (-3, -2) nên map = world + 3, +2).
@@ -645,22 +657,87 @@ env:
   # Chưa kiểm bằng mắt trong Gazebo/RViz. learning_rate GIỮ 1e-4 (chỉ đổi
   # đúng một biến: phân phối goal).
   #
-  # OFFSET CẶP `talking` 0.5-0.6 -> 0.0-0.4 (21-09-2026, theo yêu cầu, hướng A;
-  # hằng số nằm trong animated_people_release.cpp, KHÔNG có khoá YAML). |offset|
-  # ~ U(0.0, 0.4), phía ngẫu nhiên: tâm cặp người sát đường đi của robot. Cùng
+  # OFFSET CẶP `talking` 0.0-0.4 -> 0.0 (23-09-2026, theo yêu cầu; hằng số
+  # nằm trong animated_people_release.cpp, KHÔNG có khoá YAML). Tâm cặp người
+  # nằm đúng trên đường đi của robot. Cùng
   # ngày sửa lỗi offset DÍNH trong plugin (sau một lệnh `offset 0 0` mọi lệnh
   # sau vẫn offset 0 tới khi khởi động lại gzserver): các ô eval "offset train"
   # sau ô đầu tiên của mỗi lô trước đó thực ra chạy ở offset 0, và run
   # 20260920_235537 (checkpoint 335k-412k) train cả run ở offset 0 cố định.
   # Đã đo 24 lần bốc trên Gazebo thật sau khi sửa. Phải KHỞI ĐỘNG LẠI Gazebo
   # để nạp plugin mới. Resume từ 412852 (run 20260920_235537).
+  #
+  # 6 -> 4 goal (28-09-2026, theo yêu cầu): bỏ [4.5, 2.0] và [3.8, 1.5]. Kệ
+  # BookshelfA_01_002 được dời tay tới world (0.606, 0.186) yaw 1.624 (map
+  # (3.61, 2.19), footprint map x 2.85-4.36, y 1.79-2.58), nên hai goal này cách
+  # kệ 0.15 m / 0.33 m, dưới ngưỡng 0.65 m (obstacle_collision_distance 0.30 +
+  # goal_distance 0.35) và đường thẳng từ start [0, 1.5] tới [4.5, 2.0] xuyên qua
+  # kệ. Bốn goal còn lại cách kệ 1.07-6.5 m. Phân phối bearing/khoảng cách của
+  # tập chưa đo lại; số eval sau mốc này không so ngang hàng được với số cũ.
   goals:
-    - [4.5, 2.0]
     - [4.0, 4.2]
     - [4.5, 0.8]
-    - [3.8, 1.5]
     - [2.25, 5.0]
     - [-1.5, -3.0]
+  # 28-09-2026: tuyến RIÊNG của kịch bản `waiting` (map frame), mỗi phần tử
+  # [start_x, start_y, goal_x, goal_y]. Mỗi tập `waiting` bốc một tuyến thay
+  # cho tổ hợp start_poses x goals; yaw robot vẫn bốc U(-pi/2, pi/2). Plugin
+  # đặt người ở MẶT -y của kệ (cố định, không đổi phía theo tuyến), sát đường
+  # thẳng start -> goal của tuyến đó.
+  #
+  # Bản 1 (goal cố định) và bản 2 (5 tuyến theo bản vẽ, có 2 tuyến đi phía +y)
+  # đã bỏ. Đo trên run 20260928_164237 (bản 2): tuyến goal map (6.3, 3.6) đâm
+  # vật cản 4/4 tập vì goal cách tường bắc chỉ 0.65 m; người đổi sang mặt +y
+  # tuỳ tuyến; robot đi vòng cách người 2.0-3.4 m ở hầu hết tập.
+  #
+  # Bản 3, 4 (tuyến tôi tự chỉnh cho đẹp, start ở chỗ không có trong hình) đã
+  # bỏ: người dùng yêu cầu robot xuất phát ĐÚNG chỗ các nét đen trong ảnh vẽ tay
+  # 16:09 28-09.
+  #
+  # Bản 5: start/goal lấy TRỰC TIẾP từ đầu mút 5 nét đen (tách nét bằng ngưỡng
+  # màu + làm mỏng ảnh, quy pixel ra world bằng camera dựng từ 5 đèn trần, sai
+  # số ~0.2 m), đầu dưới là start, đầu trên là goal. Đầu mút vẽ tay (world):
+  #   S1 (-3.41,  1.82) -> ( 2.07, -2.83)   S2 (-2.27, -2.00) -> ( 3.27,  1.82)
+  #   S3 (-2.62, -1.98) -> ( 1.48,  2.31)   S4 (-2.67,  0.26) -> ( 3.89, -0.61)
+  #   S5 (-3.62, -1.10) -> ( 3.14, -0.91)
+  # Chỉ nhích những chỗ bắt buộc (World = map - (3, 2)):
+  #   S1 start -> (-2.4, 1.0): đầu vẽ nằm ngay trong khối trắng BookshelfC_004,
+  #      robot sẽ spawn đè lên nó; dời 1.2 m dọc theo chính nét vẽ.
+  #   S2 goal -> (2.6, 1.3): đầu vẽ cách tường bắc chỉ 0.43 m (goal cách tường
+  #      0.65 m từng làm 4/4 tập đâm vật cản); lùi 0.9 m dọc nét vẽ, cách 0.95 m.
+  #   S3 goal -> (1.3, 3.4): đầu vẽ (1.48, 2.31) trùng đúng chỗ người đứng ở
+  #      mặt +y (người cách goal 0.19 m); dời lên 1.1 m, cách tường x = 2.4 1.1 m.
+  #   S1, S2, S4, S5 và S3 start làm tròn 0.1 m.
+  # Phần tử thứ 5 = MẶT kệ người đứng: -1 hướng về world -y, 1 hướng về +y.
+  # Bốn tuyến dùng mặt -y; S3 đi vòng phía +y của kệ (đầu trên nằm ở +y) nên
+  # dùng mặt +y - đo: S3 với mặt -y chỉ cắt vùng với đỉnh 0.03, với mặt +y 0.58+.
+  # Muốn người luôn ở một phía thì đổi số này thành -1 hết.
+  # Robot xuất phát quay về phía goal +- waiting_yaw_noise (khác kịch bản khác).
+  # Tuyến `waiting` seed EKF trong frame odom (xem RUN_RL.txt, mục SEED EKF):
+  # trước đó goal bị hiểu tương đối so với chỗ xuất phát nên robot đi tới một
+  # đích khác hẳn tuyến vẽ và người đứng cách đường đi thật 2-3 m.
+  #
+  # Mô phỏng 1200 tập/tuyến (D 0.8-1.5, thuật toán đặt người của plugin, công
+  # thức sigma/2), đường thẳng start -> goal: S1 và S5, S3 cắt vùng với đỉnh
+  # trường >= 0.58 ở 100% tập; S2 và S4 chạy sát mặt kệ (0.1-0.5 m, đường thẳng
+  # cắt góc đầu kệ) nên đi qua khe giữa người và kệ với đỉnh trường 0.29-0.36
+  # (>= 0.3 ở 96-98% tập) - đó là đúng cái robot phải học né. Người cách goal
+  # >= 1.59 m (S3), >= 1.61 m (S1). Start/goal cách tường >= 0.95 m và cách
+  # BookshelfC >= 1.05 m (BookshelfC coi như bán kính 0.6 m; tường bắc y = 2.25
+  # với x > 2.4, x = 2.4 với y > 2.25). CHƯA nhìn trong Gazebo có robot.
+  waiting_routes:
+    - [0.6, 3.0, 5.1, -0.8, -1]
+    - [0.7, 0.0, 5.6, 3.3, -1]
+    - [0.4, 0.0, 4.3, 5.4, 1]
+    - [0.3, 2.3, 6.9, 1.4, -1]
+    - [-0.6, 0.9, 6.1, 1.1, -1]
+  waiting_yaw_noise: 0.35
+  # Kệ mà người `waiting` nhìn vào: tên model trong world và nửa bề dày (trục x
+  # cục bộ, đo từ mesh visual: +-0.36 m). ground_truth.py tính d_obj từ đây.
+  # animated_people_release.cpp có cùng hai số này (kWaitingShelfName,
+  # kWaitingShelfHalfThickness) - đổi một nơi phải đổi nơi kia.
+  waiting_object_model: BookshelfA_01_002
+  waiting_object_half_thickness: 0.36
   minimum_goal_distance: 2.0
 
   # --- PHÂN PHỐI ĐÍCH (02-09-2026, quay lại list cố định + random yaw) ---
@@ -770,9 +847,16 @@ observation:
 
     # 11-09-2026: KHÔNG còn neo vào toạ độ một vật thật trong Gazebo (đo
     # trước đó khiến người `waiting` đứng đè lên kệ sách - không kiểm tra
-    # được hình học mesh bằng mắt). d_obj giờ là hằng số này, KHÔNG phải
-    # khoảng cách đo thật; orientation lấy thẳng từ person.facing. Xem
-    # docstring compile_zones trong constraint_field.py.
+    # được hình học mesh bằng mắt); orientation lấy thẳng từ person.facing.
+    #
+    # 28-09-2026: d_obj lại là khoảng cách ĐO (ground_truth.py: người -> giữa
+    # mặt kệ), thay đổi theo từng tập. Số này chỉ còn là GIÁ TRỊ DỰ PHÒNG cho
+    # người không có d_obj (người được nhớ lại sau khi ra khỏi nón camera, hay
+    # tracker không biết pose vật). GIỮ 0.7: nó nằm trong nhóm `observation`
+    # nên check_resume_layout so nó với env_config.yaml của checkpoint, và đổi
+    # thành 1.15 (làm ngày 28-09) đã CHẶN --resume từ 412852 (đo 28-09-2026).
+    # Cũng là mặc định của dataclass, nên rl_agent*.yaml (không khai báo khoá
+    # này) nhận đúng cùng giá trị.
     waiting_distance: 0.7
 
     # Dưới tốc độ này coi như đứng yên -> nhận vùng tròn `base`, không phải
@@ -1013,7 +1097,12 @@ train:
   # bằng LR cao ghi đè mất kỹ năng vừa học", đã lặp lại ở dòng 928-933 và
   # 916-921 phía trên. Hạ về 1e-4, GIỮ NGUYÊN scenarios 40/60 để cô lập đúng
   # một biến, resume lại từ 177852 (không phải từ bản cuối 195901 đã tệ đi).
-  learning_rate: 0.0001
+  #
+  # 1e-4 -> 3e-4 (28-09-2026, theo yêu cầu), resume từ 412852 để học kịch bản
+  # `waiting`. LƯU Ý: 3e-4 từng làm talking_goal sập 90.0% -> 59.3% ở lần
+  # 18-09 phía trên; lần này `talking` không còn trong danh sách nên chưa biết
+  # nó có bị quên hay không - đo lại bằng --eval trên đúng file .zip.
+  learning_rate: 0.0003
   gamma: 0.99
   gae_lambda: 0.95
   clip_range: 0.2

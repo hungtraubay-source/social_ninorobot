@@ -498,7 +498,7 @@ def main():
                         default=None, metavar=('LO', 'HI'),
                         help='EVAL ONLY: force the `talking` pair\'s lateral '
                              'offset from the route to this band instead of '
-                             'the trained [0.0, 0.4] (animated_people_release.'
+                             'the trained [0.0, 0.0] (animated_people_release.'
                              'cpp). "0 0" plants the pair dead-centre on the '
                              'route -- the worst case for checking whether '
                              'the policy actually detours, not just drives '

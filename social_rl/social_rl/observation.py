@@ -140,6 +140,12 @@ class RelativeEntity:
     # zone so a consumer can weigh a region built on a 0.55 verdict against one
     # the simulator handed over at 1.0.
     scene_confidence: float = 0.0
+    # 28-09-2026: distance from this person to the object they are looking at,
+    # metres. Only a `waiting` person uses it (the d_obj of the Gaussian's
+    # sigma_h). None means "not measured", and compile_zones then falls back to
+    # config.waiting_distance -- what a recalled person, or a tracker with no
+    # object pose, gets.
+    object_distance: float = None
 
     @property
     def distance(self) -> float:

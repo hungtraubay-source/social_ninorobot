@@ -19,12 +19,14 @@ are that node's, and the report they both come from:
                                       xem RUN_RL.txt/lịch sử sửa ngày này cho
                                       lý do)
     waiting   (person facing object)  sigma_h = factor * (d_obj + d0)/2
-                                      sigma_s = sigma_r = sigma_h / 3
+                                      sigma_s = sigma_r = sigma_h / 2
                                       centre = person, orientation = person's
-                                      own facing. d_obj is config.waiting_distance
-                                      (11-09-2026) -- a tuned constant, not a
-                                      measured distance to a real object; see
-                                      compile_zones.
+                                      own facing. d_obj is the person's
+                                      measured distance to the object
+                                      (RelativeEntity.object_distance), or
+                                      config.waiting_distance when there is
+                                      none (28-09-2026; /3 -> /2 the same day);
+                                      see compile_zones.
     base      (one still person)      sigma_h = sigma_s = sigma_r = d0/2,
                                       circular (15-09-2026: was d0, theo
                                       yêu cầu)
@@ -103,11 +105,16 @@ class ConstraintFieldConfig:
     # point (config.waiting_object) the caller had to place every step. Given
     # up -- pinning it to an actual Gazebo mesh needs sighted placement this
     # package cannot do, and a wrong anchor put the actor INSIDE the shelf.
-    # d_obj is now this fixed distance, not a measured one, and orientation
-    # comes from the person's own `facing` instead of a bearing to the
-    # object. A person spawns like any other `RoutePoint`-placed actor
-    # (talking, backs_turned) and only needs to report which way they are
-    # looking, which the plugin already does correctly.
+    # d_obj was then this fixed distance, and orientation comes from the
+    # person's own `facing` instead of a bearing to the object.
+    #
+    # 28-09-2026: d_obj is measured again. ground_truth.py hands each `waiting`
+    # person their distance to the shelf (RelativeEntity.object_distance) and
+    # this value is only the FALLBACK for a person with none -- one recalled
+    # after leaving the camera cone, or a tracker that has no object pose.
+    # Kept at 0.7: it is part of the `observation` block that
+    # check_resume_layout compares against a checkpoint's env_config.yaml, and
+    # changing it blocked resuming from 412852.
     waiting_distance: float = 0.7
 
     # Speed below which a person counts as standing still: a still person with
@@ -168,8 +175,13 @@ def _talking_sigmas(separation: float, factor: float,
 
 def _waiting_sigmas(d_obj: float, factor: float,
                     config: ConstraintFieldConfig):
+    # 28-09-2026: side/rear sigma_h/3 -> sigma_h/2, theo yêu cầu. Với /3 vùng
+    # sau người chỉ rộng 0.25-0.38 m (xuống 0.10 ở 0.49-0.76 m tính từ tâm),
+    # gần bằng khoảng chạm vật lý, nên robot đi sát lưng người mà gần như
+    # không bị phạt. social_perception/scripts/social_constraint_grounding.py
+    # (make_waiting_zone) phải đổi cùng lúc.
     sigma_h = factor * ((max(0.0, d_obj) + config.d0) / 2.0)
-    side = sigma_h / 3.0
+    side = sigma_h / 2.0
     return sigma_h, side, side
 
 
@@ -372,8 +384,10 @@ def compile_zones(people, config: ConstraintFieldConfig, *,
         moving = speed >= config.still_speed
 
         if scene_type == 'waiting':
+            d_obj = getattr(person, 'object_distance', None)
             sigma_h, sigma_s, sigma_r = _waiting_sigmas(
-                config.waiting_distance, factor, config)
+                config.waiting_distance if d_obj is None else d_obj,
+                factor, config)
             orientation = person.facing
         elif scene_type == 'passing' or moving:
             sigma_h, sigma_s, sigma_r = _passing_sigmas(speed, factor, config)

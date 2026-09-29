@@ -21,7 +21,7 @@ giờ còn hai, vì:
 
     Terminal 1:
         cd ~/social_ninorobot && source install/setup.bash
-        ros2 launch linorobot2_gazebo gazebo.launch.py gui:=false
+        __NV_PRIME_RENDER_OFFLOAD=1 __GLX_VENDOR_LIBRARY_NAME=nvidia ros2 launch linorobot2_gazebo gazebo.launch.py gui:=false
 
         ĐỢI dòng: "Successfully spawned entity [linorobot2]"
         và:       "Animated people factory plugin loaded"
@@ -33,7 +33,7 @@ giờ còn hai, vì:
 
     Terminal 2:
         cd ~/social_ninorobot && source install/setup.bash
-        ros2 launch social_rl rl_train.launch.py
+        __NV_PRIME_RENDER_OFFLOAD=1 __GLX_VENDOR_LIBRARY_NAME=nvidia ros2 launch social_rl rl_train.launch.py
 
     Bất cứ lúc nào:
         tensorboard --logdir ~/social_rl_runs
@@ -686,7 +686,7 @@ SANG GIAI ĐOẠN 2 (đã làm 30-08-2026): env.scenarios trả về 1:1:1:1,
 checkpoint_every 2500, n_steps 512 -> 2048, rồi resume từ ĐỈNH chứ không phải
 từ final_model:
 
-    ros2 launch social_rl rl_train.launch.py \
+    __NV_PRIME_RENDER_OFFLOAD=1 __GLX_VENDOR_LIBRARY_NAME=nvidia ros2 launch social_rl rl_train.launch.py \
       resume:=~/social_rl_runs/20260829_222950/checkpoints/recurrent_ppo_95000_steps.zip \
       timesteps:=60000
 
@@ -705,7 +705,7 @@ nhiên lần nữa; số liệu social/* chưa có nghĩa chừng nào robot ch�
 tới B trong phòng trống. KHÔNG dùng `none` thuần - lý do đã đo, ghi ở mục
 "VÌ SAO KHÔNG PHẢI `none` THUẦN" phía trên.
 
-    ros2 launch social_rl rl_train.launch.py
+    __NV_PRIME_RENDER_OFFLOAD=1 __GLX_VENDOR_LIBRARY_NAME=nvidia ros2 launch social_rl rl_train.launch.py
 
 -------------------------------------------------------------------------------
  31-08-2026: GIAI ĐOẠN 1 XONG - SANG GIAI ĐOẠN 2 (1:1:1:1, n_steps 4096)
@@ -742,7 +742,7 @@ GIAI ĐOẠN 2 - MỘT khoá đổi trong rl_train.yaml:
     reward: GIỮ NGUYÊN HOÀN TOÀN, cùng lý do như lần trước - đổi thang phạt thì
     value function phải học lại từ đầu đúng lúc resume.
 
-    ros2 launch social_rl rl_train.launch.py \
+    __NV_PRIME_RENDER_OFFLOAD=1 __GLX_VENDOR_LIBRARY_NAME=nvidia ros2 launch social_rl rl_train.launch.py \
       resume:=~/social_rl_runs/20260831_003647/checkpoints/recurrent_ppo_100000_steps.zip \
       timesteps:=60000
 
@@ -1040,23 +1040,64 @@ một chỗ khác - nếu cố định thì policy học thuộc VỊ TRÍ chứ
     approaching    MỘT người đi ĐỐI ĐẦU về phía robot, 0.8-1.0 m/s
                    (11-09-2026, trước 0.5-0.9 m/s)
     backs_turned   hai người đứng sát vai nhau, cùng QUAY LƯNG về phía robot
-    waiting        (11-09-2026, ĐỔI TÊN từ `standing`) MỘT người, spawn qua
-                   RoutePoint() Y HỆT `talking`/`backs_turned` (an toàn,
-                   không đụng đồ đạc) - KHÔNG còn đứng sát một kệ sách thật
-                   nữa (bản đầu neo vào BookshelfA_01_001, không kiểm tra
-                   được mesh bằng mắt nên actor đâm vào kệ, đã bỏ). `facing`
-                   là GÓC NHÌN THẬT về phía kệ BookshelfA_01_001 (world
-                   1.405153, -1.449740, hardcode trong SpawnWaitingPeople) -
-                   chỉ để hợp lý về mặt hình ảnh, KHÔNG dùng để tính d_obj.
-                   d_obj trong công thức Gauss là hằng số
-                   constraint_field.waiting_distance (0.7 m mặc định,
-                   rl_train.yaml), không phải khoảng cách thật tới kệ - xem
-                   comment đầu SpawnWaitingPeople(). CHỈ CHẠY ĐƯỢC hợp lý về
-                   mặt hình ảnh TRÊN bookstore.world; lirs_test.world không
-                   có kệ đó nên `facing` chỉ trỏ vào một toạ độ vô nghĩa,
-                   không lỗi nhưng không có ý nghĩa hình ảnh.
+    waiting        (28-09-2026, VIẾT LẠI; 11-09 đổi tên từ `standing`) MỘT
+                   người đứng yên trước kệ BookshelfA_01_002, quay mặt vào GIỮA
+                   mặt kệ. Kệ được tìm theo TÊN trong world (dời kệ trong Gazebo
+                   rồi lưu world thì kịch bản đi theo). Người cách MẶT kệ
+                   D ~ U(0.8, 1.5) m, ở MẶT -y của kệ (cố định), dọc kệ trong
+                   +-0.6 m quanh giữa mặt kệ, tại chỗ gần đường thẳng
+                   start -> goal nhất (các chỗ hơn kém nhau < 0.15 m thì bốc
+                   ngẫu nhiên). Cần lệnh có `route` - ros_env luôn gửi.
+                   TUYẾN RIÊNG: env.waiting_routes (5 cặp [start_x, start_y,
+                   goal_x, goal_y, face], map) - mỗi tập bốc một tuyến, robot
+                   được đặt ở start của tuyến đó, quay về phía goal +-
+                   env.waiting_yaw_noise (khác các kịch bản kia, yaw U(-pi/2,
+                   pi/2)), goal là goal của tuyến; không dùng start_poses/goals.
+                   `face` = mặt kệ người đứng (-1 hướng về world -y, 1 hướng
+                   về +y), gửi cho plugin bằng token `face` trong lệnh. Năm
+                   tuyến lấy TRỰC TIẾP từ đầu mút 5 nét đen người dùng vẽ tay
+                   (28-09), chỉ nhích 3 đầu bắt buộc - xem comment trong
+                   rl_train.yaml. Trong reset(), tên kịch bản được bốc TRƯỚC
+                   start và goal (các kịch bản khác không đổi).
+                   d_obj của Gaussian = khoảng cách người -> giữa mặt kệ, do
+                   ground_truth.py đo (RelativeEntity.object_distance) và đổi
+                   theo từng tập; constraint_field.waiting_distance (0.7) chỉ
+                   còn là giá trị dự phòng. sigma_s = sigma_r = sigma_h/2 (trước
+                   là /3); node robot thật đổi cùng lúc (make_waiting_zone).
+                   SEED EKF (28-09-2026): `waiting` seed EKF trong frame `odom`
+                   (gazebo_world.teleport_robot(seed_frame=goal_frame)). Các
+                   kịch bản khác vẫn seed frame `map`, mà training KHÔNG có TF
+                   map -> odom nên EKF bỏ qua pose và RESET về (0, 0, yaw 0):
+                   odom thành frame của tư thế xuất phát và goal viết trong
+                   `odom` bị hiểu là TƯƠNG ĐỐI so với chỗ và hướng xuất phát.
+                   Đo trên stack riêng: /set_pose frame 'map' (1.5, 2.0, 40 độ)
+                   -> odom (0, 0, 0); frame 'odom' -> odom (1.5, 2.0, 40 độ).
+                   Kiểm tra đầu-cuối reset() thật, 7 tập `waiting`: odom = vị
+                   trí thật, khoảng cách/hướng goal policy nhận = thật; 4 tập
+                   `none` vẫn lệch (vd goal (2.25, 5.0) từ start (0, 1.5):
+                   policy nhận 5.48 m / +66 độ, thật 4.16 m / 0 độ).
+                   ĐO 28-09-2026 trên gzserver riêng, 5 tuyến x 30 tập: đúng 1
+                   người, đứng yên, đúng mặt kệ ghi trong tuyến (S3 mặt +y,
+                   4 tuyến kia mặt -y), D 0.80-1.50 m, d_obj 0.82-1.52 m, hướng
+                   nhìn lệch 0.00 độ so với giữa mặt kệ, cách goal >= 1.61 m,
+                   cách start >= 2.46 m. Đỉnh trường trên đường thẳng
+                   start -> goal: S1 0.67+, S3 0.63+, S5 0.58+; S2 và S4 chạy
+                   sát mặt kệ nên chỉ 0.29-0.36 (đi qua khe giữa người và kệ).
+                   CHƯA train tập nào, CHƯA nhìn trong Gazebo có
+                   robot. Xem thử một tập bằng tay (world frame; ví dụ tuyến S5):
+                     ros2 topic pub --once /animated_people/scenario \
+                       std_msgs/msg/String "{data: 'waiting route -3.6 -1.1 3.1 -0.9 face -1'}"
                    Đừng thêm `waiting` vào env.scenarios cho tới khi đã nhìn
                    bằng mắt trong Gazebo rằng người đứng đúng chỗ hợp lý.
+                   ĐẢO CHIỀU (29-09-2026): mỗi tập `waiting`, sau khi bốc
+                   tuyến, 50% xác suất start<->goal bị hoán đổi (ros_env.py
+                   _pick waiting_route ngay sau random.choice), `face` giữ
+                   nguyên vì đó là mặt kệ, không phải hướng đi. Lý do: robot
+                   chỉ được train đi start->goal nên chỉ học né từ một phía;
+                   test đi ngược tuyến (goal->start) đi không mượt. CHƯA đo
+                   lại 5 tuyến theo chiều ngược (constraint field, khoảng cách
+                   tới tường/kệ) sau khi đảo - cứ suy ra đối xứng theo đường
+                   thẳng, CHƯA nhìn bằng mắt trong Gazebo.
     none           không có ai - giữ trong danh sách để policy không mặc định
                    "lúc nào cũng có người" rồi mất lòng tin vào trường rỗng
 
@@ -1425,7 +1466,7 @@ nhiễu. ĐÃ HOÀN NGUYÊN. Đừng thử lại.
 
 Chạy thử 5 000 step trước để kiểm tra đường ống, đừng train thẳng 300k:
 
-    ros2 launch social_rl rl_train.launch.py timesteps:=5000
+    __NV_PRIME_RENDER_OFFLOAD=1 __GLX_VENDOR_LIBRARY_NAME=nvidia ros2 launch social_rl rl_train.launch.py timesteps:=5000
 
 render:=true mở cửa sổ gzclient để nhìn robot học. Đổi lại bằng tốc độ:
 gzclient là thứ ngốn CPU nhất trong mô phỏng.
@@ -1472,7 +1513,7 @@ phải lỗi.
 Ctrl+C ở terminal 2 KHÔNG mất hết: chương trình bắt KeyboardInterrupt và vẫn
 ghi final_model.zip. Chạy tiếp - CHỈ cần trỏ vào THƯ MỤC run:
 
-    ros2 launch social_rl rl_train.launch.py \
+    __NV_PRIME_RENDER_OFFLOAD=1 __GLX_VENDOR_LIBRARY_NAME=nvidia ros2 launch social_rl rl_train.launch.py \
         resume:=/home/son/social_rl_runs/<timestamp>
 
 Ba điều cần biết:
@@ -1494,7 +1535,7 @@ CHECKPOINT TRƯỚC 28-08-2026 KHÔNG DÙNG LẠI ĐƯỢC. Observation đổi t
 
 Giữ nguyên terminal 1, thay terminal 2:
 
-    ros2 launch social_rl rl_agent.launch.py \
+    __NV_PRIME_RENDER_OFFLOAD=1 __GLX_VENDOR_LIBRARY_NAME=nvidia ros2 launch social_rl rl_agent.launch.py \
         model_path:=/home/son/social_rl_runs/<run>/final_model.zip rviz:=true
 
 Thả người bằng tay để xem policy phản ứng:
@@ -1519,7 +1560,7 @@ này thì phải chạy thêm:
 
 CHƯA CÓ KHỐI C THÌ DÙNG people:=ground_truth ĐỂ TEST POLICY  (01-09-2026)
 
-    ros2 launch social_rl rl_agent.launch.py \
+    __NV_PRIME_RENDER_OFFLOAD=1 __GLX_VENDOR_LIBRARY_NAME=nvidia ros2 launch social_rl rl_agent.launch.py \
         model_path:=~/social_rl_runs/<run>/final_model.zip \
         people:=ground_truth
 
@@ -1591,7 +1632,7 @@ kích hoạt và phát số 0 mãi mãi trong phần đời còn lại của phi
 CÁCH TRÁNH: train và eval thì tắt hẳn filter bằng argument đã có sẵn
 (gazebo.launch.py:132, mặc định true):
 
-    ros2 launch linorobot2_gazebo gazebo.launch.py gui:=false social_safety:=false
+    __NV_PRIME_RENDER_OFFLOAD=1 __GLX_VENDOR_LIBRARY_NAME=nvidia ros2 launch linorobot2_gazebo gazebo.launch.py gui:=false social_safety:=false
 
 Đúng với chủ ý sẵn có: trainer cố ý ghi thẳng `/cmd_vel_safe` để bỏ qua filter,
 vì để filter ở giữa thì lệnh thực thi khác lệnh policy chọn và nó học nhầm
@@ -1828,7 +1869,7 @@ phép đo crossing ở trên.
  ĐƯỜNG CƠ SỞ ĐẦU TIÊN ĐO ĐƯỢC TỬ TẾ - run 20260831_221949  (01-09-2026)
 -------------------------------------------------------------------------------
 
-    ros2 run social_rl train_rl --eval ~/social_rl_runs/20260831_221949 \
+    __NV_PRIME_RENDER_OFFLOAD=1 __GLX_VENDOR_LIBRARY_NAME=nvidia ros2 run social_rl train_rl --eval ~/social_rl_runs/20260831_221949 \
         --eval-episodes 40
 
 people_source ground_truth, không nhiễu block C, deterministic, Gazebo chạy với
@@ -1960,7 +2001,7 @@ TĂNG khi policy giỏi lên vì tới đích sớm.
 --- KHỞI ĐỘNG (gõ một lần) ---------------------------------------------------
 
   T1:  cd ~/social_ninorobot && source install/setup.bash
-       ros2 launch linorobot2_gazebo gazebo.launch.py gui:=false
+       __NV_PRIME_RENDER_OFFLOAD=1 __GLX_VENDOR_LIBRARY_NAME=nvidia ros2 launch linorobot2_gazebo gazebo.launch.py gui:=false
        ĐỢI: "Animated people factory plugin loaded"
             "Successfully spawned entity [linorobot2]"
 
@@ -1969,7 +2010,7 @@ TĂNG khi policy giỏi lên vì tới đích sớm.
        timeout 8 ros2 topic hz /social_gt/people                 # ~17 Hz
        timeout 8 ros2 topic hz /model_states                     # ~93 Hz
        timeout 8 ros2 topic hz /scan                             # ~8.5 Hz
-       ros2 launch social_rl rl_train.launch.py
+       __NV_PRIME_RENDER_OFFLOAD=1 __GLX_VENDOR_LIBRARY_NAME=nvidia ros2 launch social_rl rl_train.launch.py
 
   T3:  tensorboard --logdir ~/social_rl_runs
 
@@ -1992,7 +2033,7 @@ TĂNG khi policy giỏi lên vì tới đích sớm.
   1. Ctrl+C ở T2.  GIỮ NGUYÊN Gazebo ở T1.
   2. ls -t ~/social_rl_runs | head -1
   3. CHỐT SỐ NỀN - bước dễ quên nhất, không có nó thì không so được gì:
-       ros2 run social_rl train_rl --eval ~/social_rl_runs/<run_sach> \
+       __NV_PRIME_RENDER_OFFLOAD=1 __GLX_VENDOR_LIBRARY_NAME=nvidia ros2 run social_rl train_rl --eval ~/social_rl_runs/<run_sach> \
            --eval-episodes 20 | tee ~/eval_1_sach.txt
   4. Sửa MỘT dòng, không build lại (YAML đi qua symlink):
        vlm_noise: true
@@ -2002,13 +2043,13 @@ TĂNG khi policy giỏi lên vì tới đích sớm.
        - dòng khởi động "simulated block C is ON: ..."
        - mỗi dòng kết thúc tập có "N steps with a misread label", N > 0
   7. Xong thì so hai bậc:
-       ros2 run social_rl train_rl --eval ~/social_rl_runs/<run_nhieu> \
+       __NV_PRIME_RENDER_OFFLOAD=1 __GLX_VENDOR_LIBRARY_NAME=nvidia ros2 run social_rl train_rl --eval ~/social_rl_runs/<run_nhieu> \
            --eval-episodes 20 | tee ~/eval_2_nhieu.txt
        diff -y ~/eval_1_sach.txt ~/eval_2_nhieu.txt
 
 --- PHẢI TẮT GIỮA CHỪNG ------------------------------------------------------
 
-  ros2 launch social_rl rl_train.launch.py \
+  __NV_PRIME_RENDER_OFFLOAD=1 __GLX_VENDOR_LIBRARY_NAME=nvidia ros2 launch social_rl rl_train.launch.py \
       resume:=~/social_rl_runs/<run_dang_do> timesteps:=<SỐ BƯỚC CÒN LẠI>
 
   timesteps: lúc resume là "train THÊM bấy nhiêu", KHÔNG phải tổng.
@@ -2129,7 +2170,7 @@ tiền phạt theo sự thật, chỉ số bóng) thay vì hai. ~10 ms/bước, 
  ĐO MỘT MODEL ĐÃ TRAIN - CHẾ ĐỘ EVAL  (29-08-2026)
 -------------------------------------------------------------------------------
 
-    ros2 run social_rl train_rl \
+    __NV_PRIME_RENDER_OFFLOAD=1 __GLX_VENDOR_LIBRARY_NAME=nvidia ros2 run social_rl train_rl \
         --eval ~/social_rl_runs/<run>/checkpoints/recurrent_ppo_<step>_steps.zip \
         --eval-episodes 40
 

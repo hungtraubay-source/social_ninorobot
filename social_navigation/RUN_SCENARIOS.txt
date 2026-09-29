@@ -58,7 +58,7 @@ Chúng chỉ hiện khi tốc độ tracker đạt ít nhất `prediction_min_sp
 -------------------------------------------------------------------------------
 
     # Terminal 1 - Gazebo (world mặc định lirs_test.world)
-    ros2 launch linorobot2_gazebo gazebo.launch.py run_ekf:=false
+    __NV_PRIME_RENDER_OFFLOAD=1 __GLX_VENDOR_LIBRARY_NAME=nvidia ros2 launch linorobot2_gazebo gazebo.launch.py run_ekf:=false
 
     # Terminal 2 - perception + skeleton/body-yaw RViz. Cần local YOLO Pose checkpoint.
     ros2 launch social_navigation social_bringup.launch.py rviz:=true \
@@ -130,12 +130,12 @@ giúp đầu vào RGB-D ổn định hơn.
 
     ros2 launch social_navigation social_sim.launch.py scenario:=standing
 
-`scenario/state` phát `standing`. Khởi động Block D với mode `standing`.
+`scenario/state` phát `standing`. Khởi động Block D với mode `waiting`.
 Tâm là người, trục dài quay từ người tới kệ sách; không dùng vận tốc/yaw nhiễu:
 
     ros2 launch social_perception social_constraint_grounding.launch.py \
       expected_frame:=odom use_sim_time:=true \
-      social_state:=standing
+      social_state:=waiting
 
 Chu kỳ mặc định 96 giây: đi tới 8s, nói chuyện 60s, tản ra 8s, khuất camera 20s.
 Nếu cần giữ người trong khung lâu hơn để kiểm tra tracking, sửa trong
@@ -328,7 +328,7 @@ Chọn social_state trong social_perception/config/social_constraint_grounding.y
                     0 hoặc >2 track -> xoá vòng, không tự chọn cặp
     talking: đúng HAI track -> MỘT Gaussian chung, w=0.9
     crossing: mỗi người một Gaussian theo vận tốc, w=0.5
-    standing: đúng MỘT người nhìn object YAML, Gaussian ellipse, w=0.7
+    waiting: đúng MỘT người nhìn object YAML, Gaussian ellipse, w=0.7
     stationary: đúng MỘT người, Gaussian tròn cố định, w=0.5
 Auto chọn case theo SỐ NGƯỜI Block B nhận được, không nhận diện hành vi thật.
 Hai người bất kỳ sẽ được coi là cặp talking trong chế độ thử này. Khi một
@@ -353,7 +353,7 @@ và kích thước vòng NGOÀI. Công thức talking vẫn có thể tạo vùn
 
 Crossing giữ hình học cá nhân:
     sigma_h = [1+a*(1-c)]*(d0+k*vh), sigma_s=sigma_r=sigma_h/3
-Standing dùng công thức người-vật, với `d_obj` là khoảng cách người tới kệ:
+Waiting dùng công thức người-vật, với `d_obj` là khoảng cách người tới kệ:
     yaw = atan2(y_obj-y_person, x_obj-x_person)
     sigma_h = sigma_r = [1+a*(1-c)]*(d_obj+d0)/2
     sigma_s = sigma_h/3
@@ -389,7 +389,7 @@ nối map với odom, hoặc odom để xem trực tiếp.
 Chạy thật: expected_frame:=map use_sim_time:=false; không dùng Gazebo ground truth.
 Để đổi scenario: Ctrl+C terminal social_sim, rồi chạy lại scenario:=crossing,
 scenario:=talking hoặc scenario:=standing. Giữ D với social_state: auto; 1
-1 người mặc định dùng crossing; chạy `social_state:=standing` để dùng ellipse
+1 người mặc định dùng crossing; chạy `social_state:=waiting` để dùng ellipse
 người-tới-kệ;
 frame hợp lệ tiếp theo sẽ tự chọn hình học. Các chế độ thủ công vẫn dùng được
 khi chỉnh YAML và restart D.

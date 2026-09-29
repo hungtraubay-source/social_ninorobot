@@ -39,7 +39,7 @@ class GroundingGeometryTest(unittest.TestCase):
         self.node = SimpleNamespace(
             gaussian_d0=0.5, gaussian_a=0.5, gaussian_c=0.9, gaussian_k=0.5,
             social_state='talking',
-            social_weights={'talking': 0.9, 'standing': 0.7,
+            social_weights={'talking': 0.9, 'waiting': 0.7,
                             'stationary': 0.5, 'crossing': 0.5},
             stationary_sigma_m=0.5,
             maximum_cost=100, expected_frame='odom', publish_cost_grid=False,

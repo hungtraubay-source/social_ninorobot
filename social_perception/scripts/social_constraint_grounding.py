@@ -6,8 +6,8 @@ Input: ``/people/tracked_state_json`` (``std_msgs/String``) from Block B.  Its
 ``/social_constraints/markers`` (``visualization_msgs/MarkerArray``) always,
 plus optional current ``nav_msgs/OccupancyGrid`` debug topics.
 
-The four explicit geometries are crossing, talking, standing, and stationary.
-Standing uses the person-to-configured-object vector as the ellipse heading.
+The four explicit geometries are crossing, talking, waiting, and stationary.
+Waiting uses the person-to-configured-object vector as the ellipse heading.
 Stationary is intentionally separate: it creates a fixed circular 0.5 m
 Gaussian around one person without using velocity or an object pose.
 
@@ -83,7 +83,7 @@ class SocialConstraintGrounding(Node):
         self.declare_parameter('contour_levels', [0.90, 0.75, 0.60, 0.45, 0.30, 0.15])
         self.declare_parameter('social_state', 'auto')
         self.declare_parameter('social_weight_talking', 0.9)
-        self.declare_parameter('social_weight_standing', 0.7)
+        self.declare_parameter('social_weight_waiting', 0.7)
         # Stationary is a manually selected, object-independent one-person
         # case.  Keep the radius tunable in YAML rather than baking a training
         # scenario constant into the geometry code.
@@ -92,15 +92,15 @@ class SocialConstraintGrounding(Node):
         self.declare_parameter('stationary_sigma_m', 0.4)
         self.declare_parameter('social_weight_stationary', 0.5)
         self.declare_parameter('social_weight_crossing', 0.5)
-        # Standing means a person looking at one configured object.  The
+        # Waiting means a person looking at one configured object.  The
         # object coordinates use the same metres/frame as Block-B position_m.
-        self.declare_parameter('standing_object_x_m', 0.0)
-        self.declare_parameter('standing_object_y_m', 0.0)
-        self.declare_parameter('standing_object_label', 'bookshelf')
+        self.declare_parameter('waiting_object_x_m', 0.0)
+        self.declare_parameter('waiting_object_y_m', 0.0)
+        self.declare_parameter('waiting_object_label', 'bookshelf')
         # The semantic point above is intentionally not the collision-volume
         # centre: in lirs_test.world the bookshelf's origin is its back-centre,
         # while the 0.90 x 0.40 x 1.20 m physical envelope is centred at
-        # (0, -0.195, 0.60).  Keeping both configurable lets standing geometry
+        # (0, -0.195, 0.60).  Keeping both configurable lets waiting geometry
         # retain its intended target while RViz/RL debug sees the real obstacle.
         self.declare_parameter('static_obstacle_marker_enabled', True)
         self.declare_parameter('static_obstacle_marker_center_x_m', 0.0)
@@ -135,7 +135,7 @@ class SocialConstraintGrounding(Node):
 
         self.social_weights = {
             state: float(self.get_parameter(f'social_weight_{state}').value)
-            for state in ('talking', 'standing', 'stationary', 'crossing')
+            for state in ('talking', 'waiting', 'stationary', 'crossing')
         }
         self.stationary_sigma_m = float(
             self.get_parameter('stationary_sigma_m').value)
@@ -148,13 +148,13 @@ class SocialConstraintGrounding(Node):
             raise ValueError(
                 f'social_state must be one of {sorted(supported_states)}, got {self.social_state!r}')
 
-        object_x_m = float(self.get_parameter('standing_object_x_m').value)
-        object_y_m = float(self.get_parameter('standing_object_y_m').value)
+        object_x_m = float(self.get_parameter('waiting_object_x_m').value)
+        object_y_m = float(self.get_parameter('waiting_object_y_m').value)
         if not math.isfinite(object_x_m) or not math.isfinite(object_y_m):
-            raise ValueError('standing_object_x_m/y_m must be finite metres')
-        self.standing_object_position_m = (object_x_m, object_y_m)
-        self.standing_object_label = str(
-            self.get_parameter('standing_object_label').value).strip() or 'object'
+            raise ValueError('waiting_object_x_m/y_m must be finite metres')
+        self.waiting_object_position_m = (object_x_m, object_y_m)
+        self.waiting_object_label = str(
+            self.get_parameter('waiting_object_label').value).strip() or 'object'
         self.static_obstacle_marker_enabled = bool(self.get_parameter(
             'static_obstacle_marker_enabled').value)
         static_obstacle_values = tuple(float(self.get_parameter(name).value) for name in (
@@ -304,11 +304,11 @@ class SocialConstraintGrounding(Node):
             except (TypeError, ValueError, KeyError) as error:
                 self.get_logger().warn(f'Bo qua cap talking loi: {error}')
                 return []
-        if selected_state == 'standing':
+        if selected_state == 'waiting':
             if len(people) != 1:
                 return []
             try:
-                return [self.make_standing_zone(people[0])]
+                return [self.make_waiting_zone(people[0])]
             except (TypeError, ValueError, KeyError) as error:
                 self.get_logger().warn(f'Bo qua nguoi dung yen loi: {error}')
                 return []
@@ -364,7 +364,7 @@ class SocialConstraintGrounding(Node):
     def make_zones_for_person(self, person: dict) -> List[ConstraintZone]:
         """Create the current one-person social zone from a Block-B track.
 
-        This is the crossing formulation.  The standing formulation is kept
+        This is the crossing formulation.  The waiting formulation is kept
         separate because it derives its heading and sigma from the configured
         object rather than noisy RGB-D velocity/body yaw.
         """
@@ -411,18 +411,20 @@ class SocialConstraintGrounding(Node):
             member_positions=((x_m, y_m),)
         )]
 
-    def make_standing_zone(self, person: dict) -> ConstraintZone:
-        """Create the one-person ellipse for ``standing`` near an object.
+    def make_waiting_zone(self, person: dict) -> ConstraintZone:
+        """Create the one-person ellipse for ``waiting`` near an object.
 
         The Gaussian centre is the EMA-filtered person position.  The yaw is
         the vector person -> object, which is the known person-facing direction
         in the bookshelf test.  With ``d_obj`` in metres, the supplied formula
-        is sigma_h=sigma_r=[1+a*(1-c)]*(d_obj+d0)/2 and sigma_s=sigma_h/3.
+        is sigma_h=[1+a*(1-c)]*(d_obj+d0)/2 and sigma_s=sigma_r=sigma_h/2
+        (28-09-2026: /3 -> /2, same change as _waiting_sigmas in
+        social_rl/social_rl/constraint_field.py, which trains against it).
         """
         track_id = int(person['track_id'])
         x_m = float(person['position_m']['x'])
         y_m = float(person['position_m']['y'])
-        object_x_m, object_y_m = self.standing_object_position_m
+        object_x_m, object_y_m = self.waiting_object_position_m
         dx_m, dy_m = object_x_m - x_m, object_y_m - y_m
         object_distance_m = math.hypot(dx_m, dy_m)
         if (not all(math.isfinite(value) for value in (
@@ -432,7 +434,7 @@ class SocialConstraintGrounding(Node):
 
         factor = 1.0 + self.gaussian_a * (1.0 - self.gaussian_c)
         sigma_h = factor * (object_distance_m + self.gaussian_d0) / 2.0
-        sigma_s = sigma_r = sigma_h / 3.0
+        sigma_s = sigma_r = sigma_h / 2.0
         return ConstraintZone(
             track_id=track_id,
             x_m=x_m,
@@ -442,8 +444,8 @@ class SocialConstraintGrounding(Node):
             rear_semi_axis_m=sigma_r,
             left_semi_axis_m=sigma_s,
             right_semi_axis_m=sigma_s,
-            social_state='standing',
-            social_weight=self.social_weights['standing'],
+            social_state='waiting',
+            social_weight=self.social_weights['waiting'],
             member_ids=(track_id,),
             separation_m=object_distance_m,
             member_positions=((x_m, y_m),)
@@ -638,9 +640,9 @@ class SocialConstraintGrounding(Node):
             label.color.r = label.color.g = label.color.b = label.color.a = 1.0
             label.lifetime = center_marker.lifetime
             label.text = f'TAM GAUSS ({zone.social_state})\n({zone.x_m:.2f}, {zone.y_m:.2f})'
-            if zone.social_state == 'standing':
+            if zone.social_state == 'waiting':
                 label.text += (
-                    f'\n{self.standing_object_label}: d_obj='
+                    f'\n{self.waiting_object_label}: d_obj='
                     f'{zone.separation_m:.2f} m')
             markers.markers.append(label)
 

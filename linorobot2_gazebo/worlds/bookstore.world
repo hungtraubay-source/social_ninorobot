@@ -467,8 +467,11 @@
         </include>
         <!-- 17-09-2026: dịch tay trong Gazebo đang chạy (mở lại phiên mới),
         cập nhật khớp lại, theo yêu cầu. Pose cũ: 0.585091 -3.199201
-        0.003411 0 0 0 -->
-        <pose frame="">4.060800 -3.813700 0.003411 0 0 0</pose>
+        0.003411 0 0 0
+        28-09-2026: dịch + xoay tay trong Gazebo đang chạy, lưu lại theo
+        yêu cầu (kệ đứng giữa phòng cho kịch bản `waiting`). Pose cũ:
+        4.060800 -3.813700 0.003411 0 0 0 -->
+        <pose frame="">0.605534 0.185545 0.003411 0 0 1.624390</pose>
 	</model>
 
 	<!-- <model name="BookshelfA_01_004">
@@ -554,8 +557,10 @@
         </include>
         <!-- 17-09-2026: dịch tay trong Gazebo đang chạy (mở lại phiên mới),
         cập nhật khớp lại, theo yêu cầu. Pose cũ: -4.858864 0.759761
-        0.045908 0 0 0 -->
-        <pose frame="">-1.522200 -3.894100 0.045908 0 0 0</pose>
+        0.045908 0 0 0
+        28-09-2026: dịch tay trong Gazebo đang chạy, lưu lại theo yêu cầu.
+        Pose cũ: -1.522200 -3.894100 0.045908 0 0 0 -->
+        <pose frame="">-1.522200 -4.260570 0.045908 0 0 0</pose>
 	</model>
 
 	<model name="BookshelfC_01_004">

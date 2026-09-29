@@ -721,6 +721,11 @@ private:
   // would put most of them nowhere near the robot, and an episode where nobody
   // is ever in the way teaches nothing about avoidance.
 
+  // Which face of the shelf a `waiting` person stands at: -1 = the face that
+  // looks towards world -y, +1 = towards +y. Set per command by the `face`
+  // token and put back to -y on every SelectScenario, like the offset band.
+  double waiting_face_{-1.0};
+
   double NextUniform(double low, double high)
   {
     return std::uniform_real_distribution<double>(low, high)(rng_);
@@ -887,16 +892,39 @@ private:
     gzmsg << "Spawned backs-turned pair facing " << facing << " rad\n";
   }
 
-  // One person stands still, scene_type `waiting`, facing a real bookshelf
-  // (BookshelfA_01_001 in bookstore.world) -- but placed via RoutePoint like
-  // talking/backs_turned, i.e. NOT close enough to it to ever overlap the
-  // mesh (11-09-2026: an earlier version stood the person right next to the
-  // shelf and that put the actor inside it as often as not, since this
-  // package cannot see the mesh to place against it precisely). Facing is a
-  // real bearing to the shelf for visual plausibility only; the Gaussian
-  // math still uses the tuned constant `waiting_distance`
-  // (constraint_field.py), not this real distance, which is usually several
-  // metres and would otherwise inflate the region for no reason.
+  // The shelf a `waiting` person looks at, and half its thickness (its local x
+  // axis; measured from the visual mesh, +-0.36 m). The same two numbers live
+  // in rl_train.yaml as env.waiting_object_model / waiting_object_half_thickness
+  // -- ground_truth.py turns them into d_obj -- so change one, change both.
+  static constexpr const char * kWaitingShelfName = "BookshelfA_01_002";
+  static constexpr double kWaitingShelfHalfThickness = 0.36;
+  // How far the person stands from the shelf FACE, drawn per episode, and how
+  // far along the shelf from the middle of that face they may stand (half the
+  // shelf's 1.47 m width is 0.74, so 0.6 keeps them in front of it).
+  static constexpr double kWaitingDistanceMin = 0.8;
+  static constexpr double kWaitingDistanceMax = 1.5;
+  static constexpr double kWaitingAlongLimit = 0.6;
+  // Positions along the shelf whose gap to the route is within this of the best
+  // one count as equally good, and one of them is drawn at random.
+  static constexpr double kWaitingGapTolerance = 0.15;
+
+  // One person stands still in front of the shelf, scene_type `waiting`, and
+  // looks at the middle of its face.
+  //
+  // 28-09-2026, rewritten. It used to stand on a RoutePoint and merely turn
+  // towards a hard-coded shelf coordinate (BookshelfA_01_001, since deleted
+  // from bookstore.world), so nothing tied the person to a shelf. Now:
+  //   * the shelf is looked up by name, so moving it in Gazebo and saving the
+  //     world moves the scenario with it;
+  //   * the person stands `distance` (0.8-1.5 m, per episode) from the shelf
+  //     face named by the command (default the one that looks towards world -y), at the point of a strip parallel to
+  //     that face which lies nearest the robot's straight line start -> goal,
+  //     so that line runs through their zone. Near-ties are drawn at random so
+  //     they do not always stand at one end of the shelf;
+  //   * they face the middle of the face, the same object point the robot's
+  //     grounding node measures d_obj to (make_waiting_zone).
+  // The route has to be the one ros_env sends ("waiting route x0 y0 x1 y1"):
+  // the person is placed against it, not against the default line.
   void SpawnWaitingPeople()
   {
     std::lock_guard<std::mutex> lock(actor_mutex_);
@@ -904,20 +932,81 @@ private:
       return;
     }
     ClearScenario();
-    double person_x = 0.0;
-    double person_y = 0.0;
-    RoutePoint(NextUniform(0.45, 0.75), NextUniform(-0.6, 0.6),
-      &person_x, &person_y);
-    const double shelf_x = 1.405153;
-    const double shelf_y = -1.449740;
-    const double facing = std::atan2(shelf_y - person_y, shelf_x - person_x);
+    const gazebo::physics::ModelPtr shelf = world_->ModelByName(kWaitingShelfName);
+    if (!shelf) {
+      gzerr << "waiting scenario: no model [" << kWaitingShelfName <<
+        "] in the world, so nobody was spawned\n";
+      return;
+    }
+    const auto shelf_pose = shelf->WorldPose();
+    const double shelf_x = shelf_pose.Pos().X();
+    const double shelf_y = shelf_pose.Pos().Y();
+    const double shelf_yaw = shelf_pose.Rot().Yaw();
+    // Face normal (local x) and the direction along the shelf (local y).
+    const double normal_x = std::cos(shelf_yaw);
+    const double normal_y = std::sin(shelf_yaw);
+    const double along_x = -normal_y;
+    const double along_y = normal_x;
+
+    // The face the person stands at is named by the command ("... face -1" is
+    // the face that looks towards world -y, "face 1" towards +y), so a route
+    // keeps the same side every episode instead of the plugin guessing it from
+    // the route (28-09-2026). Default -y. Tied to a world direction rather than
+    // to the shelf's own +x so it does not flip if the shelf is turned.
+    const double side = (normal_y * waiting_face_ >= 0.0) ? 1.0 : -1.0;
+
+    const double distance = NextUniform(kWaitingDistanceMin, kWaitingDistanceMax);
+    const double strip_x =
+      shelf_x + side * normal_x * (kWaitingShelfHalfThickness + distance);
+    const double strip_y =
+      shelf_y + side * normal_y * (kWaitingShelfHalfThickness + distance);
+
+    // Distance from each candidate spot on the strip to the route segment.
+    const double route_dx = route_end_x_ - route_start_x_;
+    const double route_dy = route_end_y_ - route_start_y_;
+    const double route_length_squared = route_dx * route_dx + route_dy * route_dy;
+    constexpr int kSteps = 30;
+    std::vector<double> gaps;
+    for (int i = -kSteps; i <= kSteps; ++i) {
+      const double along = kWaitingAlongLimit * i / kSteps;
+      const double x = strip_x + along * along_x;
+      const double y = strip_y + along * along_y;
+      double ratio = 0.0;
+      if (route_length_squared > 1e-9) {
+        ratio = std::clamp(
+          ((x - route_start_x_) * route_dx + (y - route_start_y_) * route_dy) /
+          route_length_squared, 0.0, 1.0);
+      }
+      gaps.push_back(std::hypot(
+          x - (route_start_x_ + ratio * route_dx),
+          y - (route_start_y_ + ratio * route_dy)));
+    }
+    const double best_gap = *std::min_element(gaps.begin(), gaps.end());
+    std::vector<int> candidates;
+    for (int i = 0; i < static_cast<int>(gaps.size()); ++i) {
+      if (gaps[i] <= best_gap + kWaitingGapTolerance) {
+        candidates.push_back(i);
+      }
+    }
+    const int chosen = candidates[std::min(
+        static_cast<int>(candidates.size()) - 1,
+        static_cast<int>(NextUniform(0.0, static_cast<double>(candidates.size()))))];
+    const double along = kWaitingAlongLimit * (chosen - kSteps) / kSteps;
+    const double person_x = strip_x + along * along_x;
+    const double person_y = strip_y + along * along_y;
+
+    const double face_x = shelf_x + side * normal_x * kWaitingShelfHalfThickness;
+    const double face_y = shelf_y + side * normal_y * kWaitingShelfHalfThickness;
+    const double facing = std::atan2(face_y - person_y, face_x - person_x);
     SpawnTalkingActor(
       "m_sweater", person_x, person_y,
       facing + kStandingMeshYawOffset, 1.112927, 0.878344, 3.75, 0.0,
       facing, "waiting");
     spawned_ = true;
     gzmsg << "Spawned waiting person at (" << person_x << ", " << person_y <<
-      "), facing shelf at (" << shelf_x << ", " << shelf_y << ")\n";
+      "), " << distance << " m from the face of " << kWaitingShelfName <<
+      ", " << gaps[chosen] << " m from the route, d_obj " <<
+      std::hypot(face_x - person_x, face_y - person_y) << " m\n";
   }
 
   // The conversation pair, but placed somewhere on the route rather than at
@@ -930,9 +1019,18 @@ private:
       return;
     }
     ClearScenario();
-    // The axis they face each other along. Randomised so the robot does not
-    // always meet the pair broadside.
-    const double axis = NextUniform(-M_PI, M_PI);
+    // The axis they face each other along, ie. the line the robot must not
+    // cross. Perpendicular to the route +/- 20 deg (27-09-2026, theo yêu cầu;
+    // quay lại từ hướng A sau khi hướng A -- axis cố định đúng 90 deg -- đo
+    // được đúng hệ quả đã cảnh báo: checkpoint 522852 đi vòng vèo hơn hẳn
+    // trước một cặp người luôn chắn đối xứng tuyệt đối giữa tuyến, geometry
+    // nó chưa từng thấy lúc train, xem video screencast 27-09-2026 17:55).
+    // Trung điểm luôn đúng trên tuyến bất kể dải này (đã đo bằng
+    // check_talking_axis_live.py, không phụ thuộc axis); dải +/- 20 deg giữ
+    // lại một chút bất đối xứng ngẫu nhiên để tránh đúng cái plateau đó, mà
+    // vẫn hẹp hơn nhiều so với +/-45 deg hay full circle cũ.
+    const double axis = RouteHeading() + M_PI / 2.0 +
+      NextUniform(-M_PI / 9.0, M_PI / 9.0);
     // Person-to-person gap in [1.0, 1.5] m (11-09-2026, requested range).
     // Was NextUniform(1.6, pair_separation_) = [1.6, 2.8]; narrower on purpose
     // to make the pair a tighter squeeze for the policy. No physical actor
@@ -1018,8 +1116,8 @@ private:
     // lần 0.3-0.5 sập nhưng chạy với lr 3e-4 nên chưa tách được lỗi do
     // offset hay do lr.
     //
-    // 0.5-0.6 -> 0.0-0.4 (21-09-2026, theo yêu cầu, hướng A). Tâm cặp người cách
-    // đường start->goal |offset| ~ U(0.0, 0.4) m, phía trái/phải ngẫu nhiên.
+    // 0.0-0.4 -> 0.0 (23-09-2026, theo yêu cầu). Tâm cặp người nằm đúng trên
+    // đường start->goal; phía trái/phải không còn ý nghĩa khi biên bằng 0.
     // Lý do: (1) muốn tâm hai người sát đường đi của robot; (2) run 235537
     // (335k-412k) THỰC RA đã train ở offset 0 cố định vì lỗi offset dính (xem
     // SelectScenario) và cho 412852 PASS 4/4 ở offset=0, nên dải này bao trùm
@@ -1083,6 +1181,7 @@ private:
     // call only, which is what the comment on it always claimed.
     talking_offset_min_ = default_talking_offset_min_;
     talking_offset_max_ = default_talking_offset_max_;
+    waiting_face_ = -1.0;
 
     // Latched republish of the bare name, so a late subscriber (zone_markers.py
     // after a restart) can catch up without anyone resending the command.
@@ -1125,11 +1224,23 @@ private:
         }
         continue;
       }
+      // 28-09-2026: "face -1" / "face 1", which side of the shelf a `waiting`
+      // person stands at. Sent by ros_env for every `waiting` route.
+      if (token == "face") {
+        double face = 0.0;
+        if (stream >> face && face != 0.0) {
+          waiting_face_ = face > 0.0 ? 1.0 : -1.0;
+        } else {
+          gzerr << "scenario command [" << command << "] has `face` without a "
+                << "non-zero number after it; keeping the default -y face\n";
+        }
+        continue;
+      }
       // 18-09-2026: EVAL-ONLY override of the `talking` pair's lateral
       // offset band, e.g. "offset 0.0 0.0" to plant the pair dead-centre on
       // the route -- the worst case for probing avoidance, not something
       // any training run sends. See EnvConfig.talking_offset_override on the
-      // Python side; default here (0.0, 0.4) is untouched unless this token
+      // Python side; default here (0.0, 0.0) is untouched unless this token
       // arrives.
       if (token == "offset") {
         double lo = 0.0, hi = 0.0;
@@ -1147,7 +1258,7 @@ private:
         rng_.seed(static_cast<unsigned int>(std::stoul(token)));
       } catch (const std::exception &) {
         gzerr << "scenario command [" << command << "] carries [" << token
-              << "], which is neither a seed, `route`, nor `offset`\n";
+              << "], which is neither a seed, `route`, `face`, nor `offset`\n";
       }
     }
 
@@ -1267,14 +1378,14 @@ private:
   double route_end_y_{0.3};
 
   // 18-09-2026: `talking` pair lateral offset band, in metres either side of
-  // the route. Matches the trained default (0.0-0.4); only a `offset lo hi`
+  // the route. Matches the trained default (0.0); only a `offset lo hi`
   // token in SelectScenario's command changes it, and that token is only
   // ever sent for an eval-only worst case, never during training. See
   // EnvConfig.talking_offset_override.
   const double default_talking_offset_min_{0.0};
-  const double default_talking_offset_max_{0.4};
+  const double default_talking_offset_max_{0.0};
   double talking_offset_min_{0.0};
-  double talking_offset_max_{0.4};
+  double talking_offset_max_{0.0};
 };
 
 GZ_REGISTER_WORLD_PLUGIN(AnimatedPeopleRelease)

@@ -48,29 +48,29 @@ social_constraint_grounding:
     # pair; 0 or >2 ->
     # clear outlines. It uses measured speed/count, not activity recognition:
     # an occluded pair can become one track. Keep auto while switching Gazebo
-    # scenarios; no D restart needed. Set ``standing`` explicitly for the
+    # scenarios; no D restart needed. Set ``waiting`` explicitly for the
     # person-looking-at-object ellipse, or ``stationary`` for a fixed circular
     # personal space that deliberately ignores measured velocity/object pose.
     # Other explicit modes force their own geometry.
     # Optional grid cost is maximum_cost*w_state*exp(-q/2), without 5% cutoff.
-    social_state: auto  # auto | talking | standing | stationary | crossing
+    social_state: auto  # auto | talking | waiting | stationary | crossing
     social_weight_talking: 0.9
-    social_weight_standing: 0.7
+    social_weight_waiting: 0.7
     # ``stationary`` is one person with a fixed circular Gaussian.  It is
-    # separate from ``standing`` because it does not depend on the bookshelf.
+    # separate from ``waiting`` because it does not depend on the bookshelf.
     # Unit: metres; sigma_h=sigma_r=sigma_s=stationary_sigma_m.
     # 15-09-2026: 0.5 -> 0.4, đồng bộ d0/2 bên train (d0 giờ 0.8).
     stationary_sigma_m: 0.4
     social_weight_stationary: 0.5
     social_weight_crossing: 0.5
-    # ``standing`` object pose, metres in the same expected_frame as Block B.
+    # ``waiting`` object pose, metres in the same expected_frame as Block B.
     # For the Gazebo bookshelf test, its centre is at world/odom (0, 0).
     # d_obj=hypot(x_obj-x_person, y_obj-y_person) is calculated every callback.
-    standing_object_x_m: 0.0
-    standing_object_y_m: 0.0
-    standing_object_label: bookshelf
+    waiting_object_x_m: 0.0
+    waiting_object_y_m: 0.0
+    waiting_object_label: bookshelf
     # RViz-only physical envelope of the static Gazebo bookshelf.  This is
-    # deliberately separate from standing_object_(x,y): the latter is the
+    # deliberately separate from waiting_object_(x,y): the latter is the
     # semantic point that the person looks toward, whereas this CUBE is the
     # full collision volume seen during RL.  All values are metres/radians in
     # expected_frame.  Set enabled=false on a real scene with no such shelf.
