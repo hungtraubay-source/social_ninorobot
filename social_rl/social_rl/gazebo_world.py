@@ -121,7 +121,8 @@ class GazeboWorld:
                 transform.translation.y + sin_yaw * x + cos_yaw * y,
                 offset_yaw + yaw)
 
-    def teleport_robot(self, x: float, y: float, yaw: float, z: float = 0.35):
+    def teleport_robot(self, x: float, y: float, yaw: float, z: float = 0.35,
+                       seed_frame: str = 'map'):
         """Move the base to a pose and tell the localizers about it.
 
         The pose is read in the frame the goals use (`odom` by default, `map`
@@ -132,6 +133,14 @@ class GazeboWorld:
         Without AMCL the /initialpose publish below simply has no subscriber;
         the EKF seed is what matters, and it is what makes odom -> base_link
         agree with the body again.
+
+        `seed_frame` is the frame the EKF is told the pose is in. 'map' (the
+        default) only works when a map -> odom edge exists to carry it into the
+        EKF's own `odom` frame. Training has none, and measured 28-09-2026 on
+        the EKF in isolation: /set_pose in frame 'map' RESETS the filter to
+        (0, 0, yaw 0) and ignores the pose, so odom becomes the frame of the
+        robot's start pose and a goal written in `odom` is relative to where
+        the episode started. 'odom' seeds it to (x, y, yaw) as asked.
         """
         world_x, world_y, world_yaw = self.map_to_world(x, y, yaw)
 
@@ -159,12 +168,13 @@ class GazeboWorld:
             self._call(self._unpause, Empty.Request())
 
         if self._reseed:
-            self._reseed_localization(x, y, yaw)
+            self._reseed_localization(x, y, yaw, seed_frame)
 
-    def _reseed_localization(self, x: float, y: float, yaw: float):
+    def _reseed_localization(self, x: float, y: float, yaw: float,
+                             frame_id: str = 'map'):
         pose = PoseWithCovarianceStamped()
         pose.header.stamp = self._node.get_clock().now().to_msg()
-        pose.header.frame_id = 'map'
+        pose.header.frame_id = frame_id
         pose.pose.pose.position.x = x
         pose.pose.pose.position.y = y
         (pose.pose.pose.orientation.x, pose.pose.pose.orientation.y,
@@ -182,5 +192,7 @@ class GazeboWorld:
         request = SetPose.Request()
         request.pose = pose
         self._call(self._set_pose, request)
-        # AMCL takes the map -> odom seed on a topic, not a service.
-        self._initial_pose_pub.publish(pose)
+        # AMCL takes the map -> odom seed on a topic, not a service, and only
+        # understands the `map` frame.
+        if frame_id == 'map':
+            self._initial_pose_pub.publish(pose)

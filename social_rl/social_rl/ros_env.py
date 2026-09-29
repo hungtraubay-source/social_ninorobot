@@ -304,6 +304,10 @@ class SocialAvoidEnv(gym.Env):
         # actor plugin so it lays people out around the route the robot is
         # actually driving. None until the first reset has sampled a goal.
         self._route = None
+        # Which shelf face the `waiting` person of this episode stands at (-1 =
+        # towards world -y, 1 = +y), from the drawn route. None for every other
+        # scenario.
+        self._waiting_face = None
 
     # ------------------------------------------------------------------ time
 
@@ -481,15 +485,45 @@ class SocialAvoidEnv(gym.Env):
         if self.env_config.talking_offset_override is not None:
             command += ' offset {:.3f} {:.3f}'.format(
                 *self.env_config.talking_offset_override)
+        if scenario == 'waiting' and self._waiting_face is not None:
+            command += ' face {:d}'.format(int(self._waiting_face))
+        if scenario == 'talking':
+            self._node.get_logger().info(
+                'talking route (world): ({:.3f}, {:.3f}) -> ({:.3f}, {:.3f})'
+                .format(*self._route))
         return command
 
     def _episode_route(self, robot_x: float, robot_y: float, goal) -> tuple:
-        """This episode's start -> goal line, converted into the world frame."""
-        start_x, start_y, _ = self._world.map_to_world(robot_x, robot_y, 0.0)
+        """Physical robot start and sampled goal, both in Gazebo's world frame.
+
+        The talking plugin positions its actors in ``world`` and the Gazebo
+        view also renders ``world``.  On a reset, ``odom`` can lag the body
+        while the EKF accepts its new seed, so deriving the route start from
+        its TF pose can put the pair on a parallel, stale route.  Ground-truth
+        training already receives the robot's exact Gazebo pose from
+        ``/model_states``; use that authoritative source when it is present.
+        The goal still starts in the configured goal frame and is transformed
+        through the static world -> map edge as before.
+        """
+        if self._ground_truth is not None:
+            start_x, start_y, _ = self._ground_truth.robot_pose()
+        else:
+            start_x, start_y, _ = self._world.map_to_world(
+                robot_x, robot_y, 0.0)
         end_x, end_y, _ = self._world.map_to_world(goal[0], goal[1], 0.0)
         return (start_x, start_y, end_x, end_y)
 
-    def _select_scenario(self):
+    def _pick_scenario(self):
+        """Draw this episode's scenario NAME from env.scenarios.
+
+        Split from _select_scenario on 28-09-2026: `waiting` has its own goal,
+        so the name has to be known before the goal is sampled.
+        """
+        if not self.env_config.scenarios:
+            return 'none'
+        return random.choice(self.env_config.scenarios)
+
+    def _select_scenario(self, scenario):
         """Lay a fresh set of people out for this episode.
 
         The trainer picks the name and the actor plugin picks the geometry, so
@@ -497,9 +531,6 @@ class SocialAvoidEnv(gym.Env):
         time. Without this the policy meets one conversation, always in the
         same place, and learns that spot rather than the situation.
         """
-        if not self.env_config.scenarios:
-            return 'none'
-        scenario = random.choice(self.env_config.scenarios)
         message = String()
         message.data = self._with_route(scenario)
         self._scenario_pub.publish(message)
@@ -516,8 +547,38 @@ class SocialAvoidEnv(gym.Env):
         if self.env_config.pause_between_steps:
             self._world.unpause()
 
+        # The scenario NAME is drawn first (28-09-2026): `waiting` runs one of
+        # env.waiting_routes -- its own start AND goal, drawn around the shelf
+        # -- instead of a start_poses x goals combination, so the start has to
+        # be known before the teleport below.
+        scenario = self._pick_scenario()
+        waiting_route = (random.choice(self.env_config.waiting_routes)
+                         if scenario == 'waiting' else None)
+        if waiting_route is not None and random.random() < 0.5:
+            # Swap start <-> goal so training also covers the line walked
+            # the other way; a route only ever driven start->goal taught the
+            # policy to detour around the person from one side only, which
+            # went ragged on eval runs that walked it goal->start. `face`
+            # (which side of the shelf the person stands on) is a property
+            # of the shelf, not of travel direction, so it is left alone.
+            sx, sy, gx, gy, face = waiting_route
+            waiting_route = (gx, gy, sx, sy, face)
+        self._waiting_face = (waiting_route[4] if waiting_route is not None
+                              else None)
+
         if self.env_config.randomize_start:
-            if self._free_space is not None:
+            if waiting_route is not None:
+                # Facing the goal, give or take env.waiting_yaw_noise, so the
+                # robot leaves the start the way the route is drawn and the
+                # person is in front of it rather than behind (a sideways
+                # start left the person outside the camera cone for the whole
+                # approach in most of the first waiting episodes).
+                heading = math.atan2(waiting_route[3] - waiting_route[1],
+                                     waiting_route[2] - waiting_route[0])
+                noise = self.env_config.waiting_yaw_noise
+                start = (waiting_route[0], waiting_route[1],
+                         heading + random.uniform(-noise, noise))
+            elif self._free_space is not None:
                 start = self._free_space.sample_pose()
             else:
                 # Position from the fixed list; yaw is drawn separately (the
@@ -537,8 +598,17 @@ class SocialAvoidEnv(gym.Env):
                 pose = random.choice(self.env_config.start_poses)
                 start = (pose[0], pose[1],
                         random.uniform(-math.pi / 2, math.pi / 2))
-            self._world.teleport_robot(float(start[0]), float(start[1]),
-                                       float(start[2]))
+            # `waiting` seeds the EKF in the goal frame (28-09-2026). With the
+            # default 'map' the EKF resets to (0, 0, yaw 0) instead, so its
+            # goal -- written in `odom` -- was measured from the robot's start
+            # pose and heading and the robot drove to a different place than
+            # the route. See gazebo_world.teleport_robot. The other scenarios
+            # keep the old seed on purpose: the checkpoint being resumed was
+            # trained with goals relative to the start.
+            self._world.teleport_robot(
+                float(start[0]), float(start[1]), float(start[2]),
+                seed_frame=(self.env_config.goal_frame
+                            if waiting_route is not None else 'map'))
             # The reseeded EKF and AMCL need a few cycles before TF reports the
             # new pose; sampling the goal any earlier measures the distance
             # from where the robot used to be.
@@ -551,9 +621,13 @@ class SocialAvoidEnv(gym.Env):
         # the name first, as this used to, meant the layout was chosen against
         # the route of the PREVIOUS episode. See _with_route for the 30.6%.
         robot_x, robot_y = self._robot_position_in_map()
-        self._goal = self._sample_goal(robot_x, robot_y)
+        # A `waiting` route carries its own goal: the plugin stands the person
+        # in front of the shelf next to the straight line from this start to
+        # that goal, so the line crosses the person's zone.
+        self._goal = (tuple(waiting_route[2:4]) if waiting_route is not None
+                      else self._sample_goal(robot_x, robot_y))
         self._route = self._episode_route(robot_x, robot_y, self._goal)
-        self._scenario = self._select_scenario()
+        self._scenario = self._select_scenario(scenario)
 
         # Settle AFTER the spawn, which is what makes the first observation of
         # the episode show people who are already walking rather than a scene

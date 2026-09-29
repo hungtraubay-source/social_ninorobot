@@ -242,6 +242,23 @@ class EnvConfig:
     # distance -- which is the whole trade-off being learned.
     goals: list = field(default_factory=lambda: [
         [4.5, 2.0], [4.0, 3.5], [4.5, 0.8], [3.8, 1.5]])
+    # 28-09-2026: the routes a `waiting` episode drives, each [start_x, start_y,
+    # goal_x, goal_y, face] in the goal frame. One is drawn per episode INSTEAD
+    # of a start_poses x goals combination. `face` is the side of the shelf the
+    # person stands at: -1 = the face that looks towards world -y, 1 = +y. The
+    # plugin puts the person in front of that face next to the straight line.
+    waiting_routes: list = field(default_factory=lambda: [
+        [0.6, 3.0, 5.1, -0.8, -1], [0.7, 0.0, 5.6, 3.3, -1],
+        [0.4, 0.0, 4.3, 5.4, 1], [0.3, 2.3, 6.9, 1.4, -1],
+        [-0.6, 0.9, 6.1, 1.1, -1]])
+    # Radians, +-. A `waiting` robot starts facing its goal, give or take this.
+    waiting_yaw_noise: float = 0.35
+    # The shelf a `waiting` person looks at: its Gazebo model name and half its
+    # thickness (local x axis, from the visual mesh). ground_truth.py turns them
+    # into d_obj. The plugin has the same two numbers as constants
+    # (kWaitingShelfName, kWaitingShelfHalfThickness) and the two must agree.
+    waiting_object_model: str = 'BookshelfA_01_002'
+    waiting_object_half_thickness: float = 0.36
     # A goal closer than this makes for an episode with no avoidance in it.
     minimum_goal_distance: float = 2.0
     # Upper bound, and only meaningful when free_space_map draws the pair. It
@@ -275,7 +292,7 @@ class EnvConfig:
 
     # 18-09-2026: EVAL-ONLY override of the `talking` pair's lateral offset
     # from the route (animated_people_release.cpp's SpawnTalkingPeople draws
-    # it from [0.0, 0.4] otherwise). None means "use the plugin's own
+    # it from [0.0, 0.0] otherwise). None means "use the plugin's own
     # default" -- this stays None for every training run and for a plain
     # --eval; only train.py's --eval-talking-offset sets it, via
     # dataclasses.replace(), never through a saved YAML. A worst case for

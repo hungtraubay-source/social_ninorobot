@@ -189,6 +189,28 @@ def _yaw(orientation) -> float:
                      + orientation.z * orientation.z))
 
 
+def waiting_object_distance(person_x: float, person_y: float, object_pose,
+                            half_thickness: float) -> float:
+    """Distance from a person to the middle of the shelf face they look at.
+
+    28-09-2026. The same number the robot's grounding node computes as d_obj
+    (social_constraint_grounding.make_waiting_zone: the straight-line distance
+    from the person to one configured object point), with that point at the
+    middle of the shelf face on the person's side. The shelf's local x axis is
+    its thickness (measured from the visual mesh: +-0.36 m), so the face
+    normal is (cos yaw, sin yaw) and `half_thickness` walks out to the face.
+    All in the Gazebo world frame.
+    """
+    yaw = _yaw(object_pose.orientation)
+    normal_x, normal_y = math.cos(yaw), math.sin(yaw)
+    offset_x = person_x - object_pose.position.x
+    offset_y = person_y - object_pose.position.y
+    side = 1.0 if offset_x * normal_x + offset_y * normal_y >= 0.0 else -1.0
+    face_x = object_pose.position.x + side * normal_x * half_thickness
+    face_y = object_pose.position.y + side * normal_y * half_thickness
+    return math.hypot(face_x - person_x, face_y - person_y)
+
+
 class GroundTruthPeople:
     """Gazebo's own answer to "who is where, doing what"."""
 
@@ -268,6 +290,16 @@ class GroundTruthPeople:
         # pose is base_link and no further transform is needed.
         return (pose.position.x, pose.position.y, _yaw(pose.orientation))
 
+    def waiting_object_pose(self):
+        """The `waiting` shelf's Pose in the world frame, from /model_states."""
+        name = self._env.waiting_object_model
+        if self.states is None or name not in self.states.name:
+            raise RuntimeError(
+                f'no model "{name}" in {self._env.model_states_topic}. It is '
+                f'the shelf a `waiting` person looks at (env.waiting_object_'
+                f'model) and has to be in the world Gazebo is running.')
+        return self.states.pose[self.states.name.index(name)]
+
     def relative_people(self, apply_camera=True):
         """Everybody the camera could see, in the robot frame.
 
@@ -300,6 +332,8 @@ class GroundTruthPeople:
 
         robot_x, robot_y, robot_yaw = self.robot_pose()
         cos_yaw, sin_yaw = math.cos(robot_yaw), math.sin(robot_yaw)
+        object_pose = (self.waiting_object_pose()
+                       if self._scene_type == 'waiting' else None)
         people = []
         for person in message.people:
             delta_x = person.pose.position.x - robot_x
@@ -325,7 +359,12 @@ class GroundTruthPeople:
                 # inferred. SimulatedVLM still corrupts both downstream.
                 scene_type=self._scene_type,
                 track_id=person.id,
-                scene_confidence=1.0))
+                scene_confidence=1.0,
+                object_distance=(None if object_pose is None else
+                                 waiting_object_distance(
+                                     person.pose.position.x,
+                                     person.pose.position.y, object_pose,
+                                     self._env.waiting_object_half_thickness))))
         return people
 
     def corrupt(self, people, now):

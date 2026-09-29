@@ -115,7 +115,7 @@ def generate_launch_description():
         DeclareLaunchArgument(
             'map', default_value=PathJoinSubstitution([
                 FindPackageShare('linorobot2_navigation'),
-                'maps', 'map_train_rl-1.yaml']),
+                'maps', 'map_waiting.yaml']),
             description='Map loaded when localization:=true'),
         DeclareLaunchArgument(
             'rviz', default_value='false',

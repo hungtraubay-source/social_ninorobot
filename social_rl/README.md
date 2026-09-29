@@ -107,8 +107,8 @@ whole workspace rather than one package.
 `RUN_RL.txt` is the source of truth, in Vietnamese. Two terminals:
 
 ```bash
-ros2 launch linorobot2_gazebo gazebo.launch.py gui:=false   # 1
-ros2 launch social_rl rl_train.launch.py                    # 2
+__NV_PRIME_RENDER_OFFLOAD=1 __GLX_VENDOR_LIBRARY_NAME=nvidia ros2 launch linorobot2_gazebo gazebo.launch.py gui:=false   # 1
+__NV_PRIME_RENDER_OFFLOAD=1 __GLX_VENDOR_LIBRARY_NAME=nvidia ros2 launch social_rl rl_train.launch.py                    # 2
 tensorboard --logdir ~/social_rl_runs                       # any time
 ```
 
@@ -138,7 +138,7 @@ TensorBoard is only a training monitor. Select a concrete checkpoint by running
 deterministic evaluation on its exact `.zip` path:
 
 ```bash
-ros2 run social_rl train_rl \
+__NV_PRIME_RENDER_OFFLOAD=1 __GLX_VENDOR_LIBRARY_NAME=nvidia ros2 run social_rl train_rl \
   --eval ~/social_rl_runs/<run>/checkpoints/recurrent_ppo_<step>_steps.zip \
   --eval-episodes 40
 ```

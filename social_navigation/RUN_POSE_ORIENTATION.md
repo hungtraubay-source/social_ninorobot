@@ -20,7 +20,7 @@ cd /home/hung/ninorobot2
 source /opt/ros/humble/setup.bash
 source install/setup.bash
 
-ros2 launch linorobot2_gazebo gazebo.launch.py \
+__NV_PRIME_RENDER_OFFLOAD=1 __GLX_VENDOR_LIBRARY_NAME=nvidia ros2 launch linorobot2_gazebo gazebo.launch.py \
   run_ekf:=false publish_odom_tf:=true
 
 
@@ -28,7 +28,7 @@ ros2 launch linorobot2_gazebo gazebo.launch.py \
 source /opt/ros/humble/setup.bash
 source install/setup.bash
 
-ros2 launch linorobot2_gazebo gazebo.launch.py \
+__NV_PRIME_RENDER_OFFLOAD=1 __GLX_VENDOR_LIBRARY_NAME=nvidia ros2 launch linorobot2_gazebo gazebo.launch.py \
   run_ekf:=false \
   spawn_x:=-3.0 \
   spawn_y:=-1.0 \

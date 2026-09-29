@@ -48,7 +48,7 @@ from visualization_msgs.msg import Marker, MarkerArray
 import yaml
 
 from social_rl.constraint_field import ConstraintFieldConfig, compile_zones, render_zones
-from social_rl.ground_truth import _SCENARIO_SCENE_TYPE, _yaw
+from social_rl.ground_truth import _SCENARIO_SCENE_TYPE, _yaw, waiting_object_distance
 from social_rl.observation import RelativeEntity
 from social_rl.ros_interface import EnvConfig, visible_to_camera
 
@@ -221,6 +221,17 @@ class ZoneMarkers(Node):
             robot_x, robot_y, robot_yaw = robot_pose or (0.0, 0.0, 0.0)
             cos_yaw, sin_yaw = math.cos(robot_yaw), math.sin(robot_yaw)
 
+            # 28-09-2026: d_obj of a `waiting` person, from the shelf's pose in
+            # /model_states -- the same call ground_truth.relative_people()
+            # makes, so the region drawn is the one the policy is given.
+            object_pose = None
+            if (self._scene_type == 'waiting' and self._robot_states is not None
+                    and self.env_cfg.waiting_object_model
+                    in self._robot_states.name):
+                object_pose = self._robot_states.pose[
+                    self._robot_states.name.index(
+                        self.env_cfg.waiting_object_model)]
+
             people = []
             for person in message.people:
                 if self.camera_only:
@@ -235,7 +246,12 @@ class ZoneMarkers(Node):
                     vx=person.velocity.linear.x, vy=person.velocity.linear.y,
                     facing=_yaw(person.pose.orientation),
                     scene_type=self._scene_type, track_id=person.id,
-                    scene_confidence=1.0))
+                    scene_confidence=1.0,
+                    object_distance=(None if object_pose is None else
+                                     waiting_object_distance(
+                                         person.pose.position.x,
+                                         person.pose.position.y, object_pose,
+                                         self.env_cfg.waiting_object_half_thickness))))
             field = compile_zones(people, self.cfg, frame=self.frame_id)
             self._publish_markers(field)
             self._publish_grid(field)

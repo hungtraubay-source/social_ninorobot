@@ -24,7 +24,7 @@ def generate_launch_description():
                               description='Use Gazebo clock; false for real camera'),
         DeclareLaunchArgument(
             'social_state', default_value='auto',
-            description=('auto, talking, standing (person-to-object ellipse), '
+            description=('auto, talking, waiting (person-to-object ellipse), '
                          'stationary (fixed circular one-person Gaussian), or crossing'),
         ),
         # Keep the default RViz view clean: Block D always publishes MarkerArray
