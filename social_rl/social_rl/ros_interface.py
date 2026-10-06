@@ -39,12 +39,9 @@ class EnvConfig:
     next to a checkpoint records exactly what produced it.
     """
 
-    # Gazebo's diff-drive plugin listens on /cmd_vel_safe and
-    # social_velocity_filter is what normally bridges /cmd_vel to it. Training
-    # writes to /cmd_vel_safe directly on purpose: with the filter in the way
-    # the executed command is not the sampled action, and the policy would be
-    # learning from somebody else's decisions. The deployment node publishes to
-    # /cmd_vel instead, so the filter stays as the last line of defence there.
+    # This names the command topic actually consumed by the simulated or real
+    # base.  The rate limiter below runs in-process in both training and the
+    # agent node, so the policy always learns the same executed command.
     cmd_vel_topic: str = '/cmd_vel_safe'
     scan_topic: str = '/scan'
 
@@ -226,8 +223,24 @@ class EnvConfig:
     # do.
     allow_reverse: bool = False
 
+    # Stateful action-to-command limiter.  Defaults keep old saved checkpoints
+    # behaviour unchanged; a new training YAML must enable it and its saved
+    # env_config.yaml then makes deployment use the identical dynamics.
+    velocity_smoothing_enabled: bool = False
+    # m/s² and rad/s².  At the default 0.2 s control period, the configured
+    # limits allow at most 0.10 m/s and 0.25 rad/s change per policy tick.
+    # They reduce steering oscillation without masking a hard safety stop.
+    max_linear_acceleration: float = 0.5
+    max_angular_acceleration: float = 1.25
+
     # --- simulation-only: episode reset ---
     randomize_start: bool = True
+    # Radians, +-.  Applied to `none` and other list-based episodes after a
+    # start position is chosen; waiting routes deliberately use their own
+    # `waiting_yaw_noise` because they must begin facing the person.  Keep the
+    # old +-90 degree curriculum as the default so saved checkpoints without
+    # this field reproduce their original reset distribution.
+    random_start_yaw_limit: float = math.pi / 2.0
     entity_name: str = 'linorobot2'
     set_entity_state_service: str = '/set_entity_state'
     ekf_set_pose_service: str = '/set_pose'

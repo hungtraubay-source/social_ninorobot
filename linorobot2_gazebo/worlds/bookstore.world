@@ -470,8 +470,74 @@
         0.003411 0 0 0
         28-09-2026: dịch + xoay tay trong Gazebo đang chạy, lưu lại theo
         yêu cầu (kệ đứng giữa phòng cho kịch bản `waiting`). Pose cũ:
-        4.060800 -3.813700 0.003411 0 0 0 -->
-        <pose frame="">0.605534 0.185545 0.003411 0 0 1.624390</pose>
+        4.060800 -3.813700 0.003411 0 0 0
+        02-10-2026: nhân bản tay trong Gazebo đang chạy thành dãy 6 kệ
+        (xem 5 model BookshelfA_01_002_clone* ngay dưới), dịch nhẹ theo
+        y khi vật lý giải quyết chồng lấn lúc nhân bản, lưu lại theo yêu
+        cầu. Đây vẫn là kệ NEO cho waiting_object_model trong rl_train.yaml
+        (kệ phải nhất trong dãy theo trục x thế giới). Pose cũ: 0.605534
+        0.185545 0.003411 0 0 1.624390 -->
+        <pose frame="">1.458002 2.420753 -0.029370 0 0 1.624390</pose>
+	</model>
+
+	<model name="BookshelfA_01_002_clone">
+        <include>
+            <uri>model://aws_robomaker_retail_BookshelfA_01</uri>
+        </include>
+        <!-- 02-10-2026: nhân bản tay trong Gazebo đang chạy từ
+        BookshelfA_01_002, xếp hàng dọc theo kệ gốc, lưu lại theo yêu
+        cầu. -->
+        <pose frame="">0.061612 2.339080 -0.029370 0 0 1.624390</pose>
+	</model>
+
+	<model name="BookshelfA_01_002_clone_0">
+        <include>
+            <uri>model://aws_robomaker_retail_BookshelfA_01</uri>
+        </include>
+        <!-- 02-10-2026: nhân bản tay trong Gazebo đang chạy từ
+        BookshelfA_01_002, xếp hàng dọc theo kệ gốc, lưu lại theo yêu
+        cầu. -->
+        <pose frame="">-1.415110 2.261890 -0.029370 0 0 1.624390</pose>
+	</model>
+
+	<model name="BookshelfA_01_002_clone_1">
+        <include>
+            <uri>model://aws_robomaker_retail_BookshelfA_01</uri>
+        </include>
+        <!-- 02-10-2026: nhân bản tay trong Gazebo đang chạy từ
+        BookshelfA_01_002, xếp hàng dọc theo kệ gốc, lưu lại theo yêu
+        cầu. -->
+        <pose frame="">-2.949040 2.150830 -0.029370 0 0 1.624390</pose>
+	</model>
+
+	<model name="BookshelfA_01_002_clone_2">
+        <include>
+            <uri>model://aws_robomaker_retail_BookshelfA_01</uri>
+        </include>
+        <!-- 02-10-2026: nhân bản tay trong Gazebo đang chạy từ
+        BookshelfA_01_002, xếp hàng dọc theo kệ gốc, lưu lại theo yêu
+        cầu. -->
+        <pose frame="">-4.431560 2.077940 -0.029370 0 0 1.624390</pose>
+	</model>
+
+	<model name="BookshelfA_01_002_clone_3">
+        <include>
+            <uri>model://aws_robomaker_retail_BookshelfA_01</uri>
+        </include>
+        <!-- 02-10-2026: nhân bản tay trong Gazebo đang chạy từ
+        BookshelfA_01_002, xếp hàng dọc theo kệ gốc, lưu lại theo yêu
+        cầu. -->
+        <pose frame="">-5.921550 2.021900 -0.029370 0 0 1.624390</pose>
+	</model>
+
+	<model name="BookshelfA_01_002_clone_4">
+        <include>
+            <uri>model://aws_robomaker_retail_BookshelfA_01</uri>
+        </include>
+        <!-- 02-10-2026: nhân bản tay trong Gazebo đang chạy từ
+        BookshelfA_01_002, xếp hàng dọc theo kệ gốc, lưu lại theo yêu
+        cầu. -->
+        <pose frame="">-6.935230 2.643890 -0.029370 0 0 1.624390</pose>
 	</model>
 
 	<!-- <model name="BookshelfA_01_004">

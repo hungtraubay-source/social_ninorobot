@@ -34,6 +34,7 @@ from social_rl.observation import (VECTOR_FEATURES,
 from social_rl.reward import RewardConfig
 from social_rl.ros_interface import (EnvConfig, PerceptionBridge,
                                      scale_action, transform_point)
+from social_rl.velocity_smoother import VelocitySmoother
 
 
 def _install_numpy_checkpoint_compat():
@@ -180,6 +181,10 @@ class SocialRlAgent(Node):
                                         self._observation_config,
                                         subscribe_social=False)
         self._cmd_pub = self.create_publisher(Twist, self._cmd_vel_topic, 10)
+        self._velocity_smoother = VelocitySmoother(
+            self._env_config.max_linear_acceleration,
+            self._env_config.max_angular_acceleration,
+            enabled=self._env_config.velocity_smoothing_enabled)
         self._constraint_field = None
         self._constraint_field_received_ns = None
         self._constraint_field_timeout = max(
@@ -213,6 +218,10 @@ class SocialRlAgent(Node):
             f'{VECTOR_FEATURES} scalars, '
             f'{1.0 / self._env_config.control_period:.1f} Hz -> '
             f'{self._cmd_vel_topic}'
+            f'; smoother '
+            f'{"on" if self._env_config.velocity_smoothing_enabled else "off"}'
+            f' ({self._env_config.max_linear_acceleration:.2f} m/s^2, '
+            f'{self._env_config.max_angular_acceleration:.2f} rad/s^2)'
             f'; goal frame {self._env_config.goal_frame}. Waiting on '
             f'{goal_topic}.')
 
@@ -267,8 +276,12 @@ class SocialRlAgent(Node):
     def _reset_policy_state(self):
         self._lstm_states = None
         self._episode_start = True
+        self._velocity_smoother.reset()
 
     def stop(self):
+        # Sensor/field failures and goal completion are safety stops.  They
+        # bypass the normal acceleration limit and also clear its old command.
+        self._velocity_smoother.reset()
         if rclpy.ok():
             self._cmd_pub.publish(Twist())
 
@@ -326,7 +339,9 @@ class SocialRlAgent(Node):
             deterministic=self._deterministic)
         self._episode_start = False
 
-        linear, angular = scale_action(action, self._env_config)
+        target_linear, target_angular = scale_action(action, self._env_config)
+        linear, angular = self._velocity_smoother.step(
+            target_linear, target_angular, self._env_config.control_period)
         command = Twist()
         command.linear.x = linear
         command.angular.z = angular

@@ -36,6 +36,7 @@ from social_rl.observation import VECTOR_FEATURES, ObservationConfig
 from social_rl.reward import RewardConfig, evaluate_step
 from social_rl.ros_interface import (EnvConfig, PerceptionBridge,
                                      scale_action)
+from social_rl.velocity_smoother import VelocitySmoother
 
 
 def _reward_intrusion_by_type(state: dict, has_ground_truth: bool) -> dict:
@@ -231,6 +232,10 @@ class SocialAvoidEnv(gym.Env):
             String, env_config.scenario_topic, 10)
         self._cmd_pub = self._node.create_publisher(
             Twist, env_config.cmd_vel_topic, 10)
+        self._velocity_smoother = VelocitySmoother(
+            env_config.max_linear_acceleration,
+            env_config.max_angular_acceleration,
+            enabled=env_config.velocity_smoothing_enabled)
 
         self._world = GazeboWorld(
             self._node, self._tf_buffer,
@@ -384,6 +389,11 @@ class SocialAvoidEnv(gym.Env):
         command.linear.x = float(linear)
         command.angular.z = float(angular)
         self._cmd_pub.publish(command)
+
+    def _stop(self):
+        """Send an immediate zero; safety stops must not be rate-limited."""
+        self._velocity_smoother.reset()
+        self._publish(0.0, 0.0)
 
     def _robot_position_in_map(self):
         transform = self._tf_buffer.lookup_transform(
@@ -541,7 +551,7 @@ class SocialAvoidEnv(gym.Env):
         if seed is not None:
             random.seed(seed)
 
-        self._publish(0.0, 0.0)
+        self._stop()
         # Physics has to run for the teleport to settle, for the actors to
         # start walking and for the localizers to catch up.
         if self.env_config.pause_between_steps:
@@ -584,20 +594,16 @@ class SocialAvoidEnv(gym.Env):
                 # Position from the fixed list; yaw is drawn separately (the
                 # yaw written in start_poses is ignored).
                 #
-                # Full circle (-pi, pi) is what lets the goal land behind the
-                # robot so it has to learn to turn around. 04-09-2026: dropped
-                # to (-pi/2, pi/2) as a curriculum step -- none_goal plateaued
-                # ~0.6 across LR, scenario-mix and heading_gain changes with
-                # the full circle, and goals sit roughly towards +x/+y from
-                # every start pose, so full-circle yaw was spending a lot of
-                # episodes on a near-180 deg pivot (~16 control steps at
-                # max_angular_speed 1.0) before any progress reward was
-                # reachable. Narrower range still asks for real turning (up to
-                # ~90 deg) without that worst case. Widen back towards the
-                # full circle once none_goal recovers past 0.90.
+                # `random_start_yaw_limit` is a curriculum knob.  It is kept
+                # separate from waiting_yaw_noise: only these list-based
+                # episodes may start away from their nominal route heading.
                 pose = random.choice(self.env_config.start_poses)
+                yaw_limit = self.env_config.random_start_yaw_limit
+                if not 0.0 <= yaw_limit <= math.pi:
+                    raise ValueError(
+                        'random_start_yaw_limit must be in [0, pi] radians')
                 start = (pose[0], pose[1],
-                        random.uniform(-math.pi / 2, math.pi / 2))
+                        random.uniform(-yaw_limit, yaw_limit))
             # `waiting` seeds the EKF in the goal frame (28-09-2026). With the
             # default 'map' the EKF resets to (0, 0, yaw 0) instead, so its
             # goal -- written in `odom` -- was measured from the robot's start
@@ -664,7 +670,12 @@ class SocialAvoidEnv(gym.Env):
         return observation, {'goal': self._goal, 'scenario': self._scenario}
 
     def step(self, action):
-        linear, angular = scale_action(action, self.env_config)
+        target_linear, target_angular = scale_action(action, self.env_config)
+        # The policy target is deliberately filtered before Gazebo advances.
+        # Therefore PPO receives the consequences of the same acceleration
+        # bound that the robot will use after this run is deployed.
+        linear, angular = self._velocity_smoother.step(
+            target_linear, target_angular, self.env_config.control_period)
         self._publish(linear, angular)
 
         # Advance the world by exactly one control period. The command is
@@ -732,7 +743,7 @@ class SocialAvoidEnv(gym.Env):
         truncated = (not outcome.terminated
                      and self._steps >= self.env_config.max_episode_steps)
         if outcome.terminated or truncated:
-            self._publish(0.0, 0.0)
+            self._stop()
 
         info = {'reward_components': outcome.components}
         if outcome.terminated or truncated:
@@ -796,7 +807,7 @@ class SocialAvoidEnv(gym.Env):
                 self._world.unpause()
             except RuntimeError as error:
                 self._logger.warn(f'could not unpause on close: {error}')
-        self._publish(0.0, 0.0)
+        self._stop()
         if self._gzclient is not None and self._gzclient.poll() is None:
             self._gzclient.terminate()
             self._gzclient.wait(timeout=5.0)
